@@ -1,0 +1,9 @@
+# Nix
+result
+result-*
+
+# clangd
+.cache
+compile_commands.json
+
+tetris
