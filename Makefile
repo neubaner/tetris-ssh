@@ -1,7 +1,10 @@
+CFLAGS=-std=c99 -Wall -Wextra -Werror -ggdb $(shell pkg-config --cflags libssh)
+LDFLAGS=$(shell pkg-config --libs libssh)
+
 all: tetris
 
 tetris: src/tetris.c
-	$(CC) src/tetris.c -std=c99 -Wall -Wextra $(pkg-config --cflags libssh) -o tetris $(pkg-config --libs libssh)
+	$(CC) src/tetris.c $(CFLAGS) -o tetris $(LDFLAGS)
 
 clean:
 	rm -f tetris

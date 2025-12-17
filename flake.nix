@@ -32,8 +32,14 @@
         };
         devShells = {
           default = pkgs.mkShell {
-            buildInputs = with pkgs; [ libssh ];
-            packages = with pkgs; [ pkg-config clang-tools clang bear ];
+            buildInputs = [
+              (pkgs.libssh.overrideAttrs (oldAttrs: {
+                dontStrip = true;
+                cmakeBuildType = "Debug";
+              }))
+
+            ];
+            packages = with pkgs; [ pkg-config clang-tools clang bear gdb ];
           };
         };
       });

@@ -7,3 +7,9 @@ result-*
 compile_commands.json
 
 tetris
+
+# rsa keys
+rsa_key
+rsa_key.pub
+
+.gdbinit
