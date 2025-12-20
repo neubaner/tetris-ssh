@@ -1,4 +1,3 @@
-#include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -15,8 +14,6 @@
 #include <libssh/server.h>
 
 struct pty_data {
-    int master;
-    int slave;
     struct winsize win_size;
 };
 
@@ -25,35 +22,56 @@ struct session_ctx {
     ssh_channel channel;
     struct ssh_channel_callbacks_struct channel_cbs;
 
-    const char* username;
+    const char *username;
     struct pty_data pty;
 };
 
-static int ptsname_r(int fd, char *buf, size_t size)
+#define ANSI_ERASE_ENTITY_SCREEN "\x1b[2J"
+#define ANSI_CURSOR_HOME_POSITION "\x1b[H"
+#define ANSI_HIDE_CURSOR "\x1b[?25l"
+
+static int x = 10;
+static int y = 10;
+
+static void render(ssh_channel channel, int x, int y)
 {
-    if (buf == NULL) {
-        return EINVAL;
+    char buffer[1024] = {0};
+    char *cursor = buffer;
+
+    memcpy(cursor, ANSI_ERASE_ENTITY_SCREEN, sizeof(ANSI_ERASE_ENTITY_SCREEN) - 1); cursor += sizeof(ANSI_ERASE_ENTITY_SCREEN) - 1;
+    memcpy(cursor, ANSI_CURSOR_HOME_POSITION, sizeof(ANSI_CURSOR_HOME_POSITION) - 1); cursor += sizeof(ANSI_CURSOR_HOME_POSITION) - 1;
+    memcpy(cursor, ANSI_HIDE_CURSOR, sizeof(ANSI_HIDE_CURSOR) - 1); cursor += sizeof(ANSI_HIDE_CURSOR) - 1;
+
+    for (int i = 0; i < x; i++) {
+        // Arrow right
+        memcpy(cursor, "\x1b[C", 3);
+        cursor += 3;
     }
 
-    unsigned int slave_pty_number;
-    int result = ioctl(fd, TIOCGPTN, &slave_pty_number);
-    if (result != 0) {
-        return result;
+    for (int i = 0; i < y; i++) {
+        // Arrow down
+        memcpy(cursor, "\x1b[B", 3);
+        cursor += 3;
     }
 
-    int written_bytes = snprintf(buf, size, "/dev/pts/%d", slave_pty_number);
+    const char hello_world[] = "\x1b[1;4;31;44mHello world!\x1b[0mReset?\r\n";
+    memcpy(cursor, hello_world, sizeof(hello_world) - 1);
+    cursor += sizeof(hello_world) - 1;
 
-    if ((size_t)written_bytes >= size) {
-        return ERANGE;
-    }
-
-    return 0;
+    ssh_channel_write(channel, buffer, (uint32_t)(cursor - buffer));
 }
 
-static int unlockpt(int fd)
+static int shell_request(ssh_session session, ssh_channel channel, void *userdata)
 {
-    int zero = 0;
-    return ioctl(fd, TIOCSPTLCK, &zero);
+    (void)session;
+    (void)channel;
+    (void)userdata;
+
+    // struct session_ctx *ctx = (struct session_ctx *)userdata;
+
+    render(channel, x, y);
+
+    return SSH_OK;
 }
 
 static int pty_request(ssh_session session,
@@ -75,40 +93,18 @@ static int pty_request(ssh_session session,
         .win_size.ws_ypixel = pwheight,
     };
 
-    int pty_master = open("/dev/ptmx", O_RDWR);
-    int result = unlockpt(pty_master);
-    if (result != 0) {
-        fprintf(stderr, "Failed to unlock pty_master. %s\n", strerror(result));
-        close(pty_master);
-        return SSH_ERROR;
-    }
-
-    char pty_slave_name[64];
-    result = ptsname_r(pty_master, pty_slave_name, sizeof(pty_slave_name));
-    if (result != 0) {
-        fprintf(stderr, "Failed to get pts name. %s.\n", strerror(result));
-        close(pty_master);
-        return SSH_ERROR;
-    }
-
-    int pty_slave = open(pty_slave_name, O_RDWR | O_NOCTTY);
-
-    printf("Opening pts = %s\n", pty_slave_name);
-
-    ctx->pty.master = pty_master;
-    ctx->pty.slave = pty_slave;
-
     printf("term=%s width=%d height=%d, pxwidth=%d, pwheight=%d\n", term, width, height, pxwidth, pwheight);
     return SSH_OK;
 }
 
 static int data_function(ssh_session session, ssh_channel channel, void *data, uint32_t len, int is_stderr, void *userdata)
 {
-    (void)session;
     (void)channel;
+    (void)session;
     (void)is_stderr;
+    (void)userdata;
 
-    struct session_ctx *ctx = (struct session_ctx *)userdata;
+    // struct session_ctx *ctx = (struct session_ctx *)userdata;
 
     printf("Received %d bytes:", len);
     for (uint32_t i = 0; i < len; i++) {
@@ -117,47 +113,33 @@ static int data_function(ssh_session session, ssh_channel channel, void *data, u
     printf("\n");
 
     if (len > 0) {
-        return write(ctx->pty.master, data, len);
+        // return ssh_channel_write(channel, data, len);
     }
 
-    return 0;
-}
+    char *chars = (char *)data;
+    uint32_t i;
+    for (i = 0; i < len; i++) {
+        char c = chars[i];
 
-static int process_pty_event(socket_t fd, int revents, void *userdata)
-{
-    ssh_channel channel = (ssh_channel)userdata;
-
-    if (revents & POLLIN) {
-        char buffer[4096];
-
-        int n = read(fd, &buffer, sizeof(buffer));
-
-        if (n > 0) {
-            ssh_channel_write(channel, &buffer, n);
+        if (c == 'j') {
+            y += 1;
+        } else if (c == 'k') {
+            y -= 1;
+        } else if (c == 'l') {
+            x += 1;
+        } else if (c == 'h') {
+            x -= 1;
+        } else if (c == 0x03) {
+            ssh_channel_close(channel);
+            return -1;
         }
-
-        return n;
     }
 
-    return -1;
+    render(channel, x, y);
+
+    return i;
 }
 
-static int shell_request(ssh_session session, ssh_channel channel, void *userdata)
-{
-    (void)session;
-    (void)channel;
-    (void)userdata;
-
-    struct session_ctx *ctx = (struct session_ctx *)userdata;
-
-    ssh_event_add_fd(ctx->event, ctx->pty.master, POLLIN, process_pty_event, channel);
-
-    const char hello_world[] = "Hello world!\n";
-    ssize_t written = write(ctx->pty.master, &hello_world, sizeof(hello_world) - 1);
-    (void)written;
-
-    return SSH_OK;
-}
 
 static ssh_channel channel_open(ssh_session session, void *userdata)
 {
