@@ -12,6 +12,7 @@
 #include <libssh/callbacks.h>
 #include <libssh/libssh.h>
 #include <libssh/server.h>
+#include "input.h"
 
 struct pty_data {
     struct winsize win_size;
@@ -24,14 +25,15 @@ struct session_ctx {
 
     const char *username;
     struct pty_data pty;
+    ring_buf input_stream;
 };
 
 #define ANSI_ERASE_ENTITY_SCREEN "\x1b[2J"
 #define ANSI_CURSOR_HOME_POSITION "\x1b[H"
 #define ANSI_HIDE_CURSOR "\x1b[?25l"
 
-static int x = 10;
-static int y = 10;
+static int x = 0;
+static int y = 0;
 
 static void render(ssh_channel channel, int x, int y)
 {
@@ -104,7 +106,7 @@ static int data_function(ssh_session session, ssh_channel channel, void *data, u
     (void)is_stderr;
     (void)userdata;
 
-    // struct session_ctx *ctx = (struct session_ctx *)userdata;
+    struct session_ctx *ctx = (struct session_ctx *)userdata;
 
     printf("Received %d bytes:", len);
     for (uint32_t i = 0; i < len; i++) {
@@ -121,17 +123,49 @@ static int data_function(ssh_session session, ssh_channel channel, void *data, u
     for (i = 0; i < len; i++) {
         char c = chars[i];
 
-        if (c == 'j') {
-            y += 1;
-        } else if (c == 'k') {
-            y -= 1;
-        } else if (c == 'l') {
-            x += 1;
-        } else if (c == 'h') {
-            x -= 1;
-        } else if (c == 0x03) {
-            ssh_channel_close(channel);
-            return -1;
+        if (ring_buf_is_full(&ctx->input_stream)) {
+            break;
+        }
+
+        ring_buf_push(&ctx->input_stream, c);
+    }
+
+    while (!ring_buf_is_empty(&ctx->input_stream)) {
+        key_press press = key_press_read(&ctx->input_stream);
+
+        printf("Got key ");
+        if ((press.mods & KEY_MOD_CTRL) != 0) {
+            printf("ctrl+");
+        }
+        if ((press.mods & KEY_MOD_SHIFT) != 0) {
+            printf("shift+");
+        }
+        if ((press.mods & KEY_MOD_ALT) != 0) {
+            printf("alt+");
+        }
+        printf("%s\n", key_sym_str(press.sym));
+
+        int speed = press.mods & KEY_MOD_SHIFT ? 2 : 1;
+
+        switch(press.sym) {
+        case KEY_SYM_J:
+            y += 1 * speed;
+            break;
+        case KEY_SYM_K:
+            y -= 1 * speed;
+            break;
+        case KEY_SYM_L:
+            x += 1 * speed;
+            break;
+        case KEY_SYM_H:
+            x -= 1 * speed;
+            break;
+        case KEY_SYM_C:
+            if ((press.mods & KEY_MOD_CTRL) != 0) {
+                ssh_channel_close(channel);
+                return -1;
+            }
+        default:
         }
     }
 

@@ -3,7 +3,7 @@ LDFLAGS=$(shell pkg-config --libs libssh)
 
 all: tetris
 
-tetris: src/tetris.c
+tetris: src/tetris.c src/input.h
 	$(CC) src/tetris.c $(CFLAGS) -o tetris $(LDFLAGS)
 
 clean:
