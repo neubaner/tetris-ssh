@@ -25,7 +25,7 @@ struct session_ctx {
 
     const char *username;
     struct pty_data pty;
-    ring_buf input_stream;
+    key_press_reader key_reader;
 };
 
 #define ANSI_ERASE_ENTITY_SCREEN "\x1b[2J"
@@ -114,24 +114,26 @@ static int data_function(ssh_session session, ssh_channel channel, void *data, u
     }
     printf("\n");
 
-    if (len > 0) {
-        // return ssh_channel_write(channel, data, len);
-    }
-
     char *chars = (char *)data;
     uint32_t i;
     for (i = 0; i < len; i++) {
         char c = chars[i];
 
-        if (ring_buf_is_full(&ctx->input_stream)) {
+        if (ring_buf_is_full(&ctx->key_reader.buf)) {
             break;
         }
 
-        ring_buf_push(&ctx->input_stream, c);
+        ring_buf_push(&ctx->key_reader.buf, c);
     }
 
-    while (!ring_buf_is_empty(&ctx->input_stream)) {
-        key_press press = key_press_read(&ctx->input_stream);
+    while (!ring_buf_is_empty(&ctx->key_reader.buf)) {
+        key_press_result result = key_press_read(&ctx->key_reader);
+
+        if (result.needs_more_input) {
+            break;
+        }
+
+        key_press press = result.press;
 
         printf("Got key ");
         if ((press.mods & KEY_MOD_CTRL) != 0) {
@@ -149,15 +151,19 @@ static int data_function(ssh_session session, ssh_channel channel, void *data, u
 
         switch(press.sym) {
         case KEY_SYM_J:
+        case KEY_SYM_ARROW_DOWN:
             y += 1 * speed;
             break;
         case KEY_SYM_K:
+        case KEY_SYM_ARROW_UP:
             y -= 1 * speed;
             break;
         case KEY_SYM_L:
+        case KEY_SYM_ARROW_RIGHT:
             x += 1 * speed;
             break;
         case KEY_SYM_H:
+        case KEY_SYM_ARROW_LEFT:
             x -= 1 * speed;
             break;
         case KEY_SYM_C:
@@ -165,7 +171,9 @@ static int data_function(ssh_session session, ssh_channel channel, void *data, u
                 ssh_channel_close(channel);
                 return -1;
             }
+            break;
         default:
+            break;
         }
     }
 

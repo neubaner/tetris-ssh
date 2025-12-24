@@ -1,37 +1,43 @@
+#ifndef TETRIS_SSH_INPUT_H
+#define TETRIS_SSH_INPUT_H
+
 #include <assert.h>
 #include <stdint.h>
 #include <stdbool.h>
 
 #define RING_BUF_CAPACITY 64
-#define RING_BUF_MASK(v) ((v) % RING_BUF_CAPACITY == 0)
+#define RING_BUF_MASK(v) ((v) % RING_BUF_CAPACITY)
 
 typedef struct ring_buf {
-    uint32_t read;
-    uint32_t write;
+    // Reader cursor of the buffer
+    uint32_t head;
+    // Writer cursor of the buffer
+    uint32_t tail;
+    // Contents of the buffer
     char buffer[RING_BUF_CAPACITY];
 } ring_buf;
 
 uint32_t ring_buf_size(const ring_buf *buf)
 {
-    return buf->write - buf->read;
+    return buf->tail - buf->head;
 }
 
 bool ring_buf_is_empty(const ring_buf *buf)
 {
-    return buf->read == buf->write;
+    return buf->head == buf->tail;
 }
 
 bool ring_buf_is_full(const ring_buf *buf)
 {
-    return (buf->write - buf->read) >= RING_BUF_CAPACITY;
+    return (buf->tail - buf->head) >= RING_BUF_CAPACITY;
 }
 
 char ring_buf_shift(ring_buf *buf)
 {
     assert(!ring_buf_is_empty(buf));
 
-    char value = buf->buffer[RING_BUF_MASK(buf->read)];
-    buf->read++;
+    char value = buf->buffer[RING_BUF_MASK(buf->head++)];
+    buf->head++;
 
     return value;
 }
@@ -40,15 +46,15 @@ char ring_buf_peak(const ring_buf *buf)
 {
     assert(!ring_buf_is_empty(buf));
 
-    return buf->buffer[RING_BUF_MASK(buf->read)];
+    return buf->buffer[RING_BUF_MASK(buf->head)];
 }
 
 void ring_buf_push(ring_buf *buf, char value)
 {
     assert(!ring_buf_is_full(buf));
 
-    buf->buffer[RING_BUF_MASK(buf->write)] = value;
-    buf->write++;
+    buf->buffer[RING_BUF_MASK(buf->tail)] = value;
+    buf->tail++;
 }
 
 #define KEY_SYM_X_MACRO(X) \
@@ -119,29 +125,99 @@ const char *key_sym_str(key_sym sym)
     return keys_table[sym];
 }
 
-key_press key_press_read(struct ring_buf *buf)
+typedef struct key_press_result {
+    key_press press;
+    bool needs_more_input;
+} key_press_result ;
+
+typedef enum key_press_state {
+    KEY_PRESS_STATE_INITIAL,
+    KEY_PRESS_STATE_ESCAPE,
+    KEY_PRESS_STATE_CSI,
+} key_press_state;
+
+typedef struct key_press_reader {
+    ring_buf buf;
+    key_press_state state;
+} key_press_reader;
+
+// Reference: https://invisible-island.net/xterm/ctlseqs/ctlseqs.html
+key_press_result key_press_read(key_press_reader *reader)
 {
-    if (ring_buf_is_empty(buf)) {
-        return (key_press){};
-    }
+    while(true) {
+        if (ring_buf_is_empty(&reader->buf)) {
+            return (key_press_result){ .needs_more_input = true, };
+        }
 
-    char top = ring_buf_shift(buf);
+        char top = ring_buf_shift(&reader->buf);
 
-    if (top >= 'A' && top <= 'Z') {
-        return (key_press) {
-            .sym =  top - 'A' + KEY_SYM_A,
-            .mods = KEY_MOD_SHIFT,
-        };
-    } else if (top >= 'a' && top <= 'z') {
-        return (key_press) {
-            .sym =  top - 'a' + KEY_SYM_A,
-        };
-    } else if (top >= ('A' & 0x1f) && top <= ('Z' & 0x1f)) {
-        return (key_press) {
-            .sym =  (top & 0x1f) + KEY_SYM_A - 1,
-            .mods = KEY_MOD_CTRL,
-        };
-    } else {
-        return (key_press){};
+        switch(reader->state) {
+        case KEY_PRESS_STATE_INITIAL: {
+            switch(top) {
+            case '\x1b':
+                reader->state = KEY_PRESS_STATE_ESCAPE;
+                break;
+            case '\x9b':
+                reader->state = KEY_PRESS_STATE_CSI;
+                break;
+            case '\r':
+                return (key_press_result) {
+                    .press.sym = KEY_SYM_ENTER,
+                };
+            default:
+                if (top >= 'A' && top <= 'Z') {
+                    return (key_press_result) {
+                        .press.sym =  top - 'A' + KEY_SYM_A,
+                        .press.mods = KEY_MOD_SHIFT,
+                    };
+                } else if (top >= 'a' && top <= 'z') {
+                    return (key_press_result) {
+                        .press.sym =  top - 'a' + KEY_SYM_A,
+                    };
+                } else if (top >= ('A' & 0x1f) && top <= ('Z' & 0x1f)) {
+                    return (key_press_result) {
+                        .press.sym =  (top & 0x1f) + KEY_SYM_A - 1,
+                        .press.mods = KEY_MOD_CTRL,
+                    };
+                } else {
+                    // XTerm resets their state machine to the initial state when finding unexcepted charaters.
+                    reader->state = KEY_PRESS_STATE_INITIAL;
+                }
+            }
+        } break;
+        case KEY_PRESS_STATE_ESCAPE: {
+            if (top == '[') {
+                reader->state = KEY_PRESS_STATE_CSI;
+            } else {
+                // TODO: Should we handle other escape sequences?
+                reader->state = KEY_PRESS_STATE_INITIAL;
+            }
+        } break;
+        case KEY_PRESS_STATE_CSI: {
+            reader->state = KEY_PRESS_STATE_INITIAL;
+
+            // TODO: Cursor movement might have an parameter
+            switch (top) {
+            case 'A':
+                return (key_press_result) {
+                    .press.sym = KEY_SYM_ARROW_UP,
+                };
+            case 'B':
+                return (key_press_result) {
+                    .press.sym = KEY_SYM_ARROW_DOWN,
+                };
+            case 'C':
+                return (key_press_result) {
+                    .press.sym = KEY_SYM_ARROW_RIGHT,
+                };
+            case 'D':
+                return (key_press_result) {
+                    .press.sym = KEY_SYM_ARROW_LEFT,
+                };
+            }
+        }
+        }
     }
 }
+
+#endif // TETRIS_SSH_INPUT_H

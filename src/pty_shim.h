@@ -1,5 +1,5 @@
-#ifndef TETRIS_SSH_PTY_SHIM
-#define TETRIS_SSH_PTY_SHIM
+#ifndef TETRIS_SSH_PTY_SHIM_H
+#define TETRIS_SSH_PTY_SHIM_H
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -33,5 +33,5 @@ int unlockpt(int fd)
     return ioctl(fd, TIOCSPTLCK, &zero);
 }
 
-#endif // TETRIS_SSH_PTY_SHIM
+#endif // TETRIS_SSH_PTY_SHIM_H
 
