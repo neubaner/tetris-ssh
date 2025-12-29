@@ -13,3 +13,5 @@ rsa_key
 rsa_key.pub
 
 .gdbinit
+
+obj/

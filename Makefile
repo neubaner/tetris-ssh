@@ -1,12 +1,18 @@
-CFLAGS=-std=c99 -Wall -Wextra -Werror -ggdb $(shell pkg-config --cflags libssh)
+CFLAGS=-std=c99 -Wall -Wextra -Werror -pedantic -ggdb -O3 -flto=auto -fuse-linker-plugin $(shell pkg-config --cflags libssh)
 LDFLAGS=$(shell pkg-config --libs libssh)
 
 all: tetris
 
-tetris: src/tetris.c src/input.h
-	$(CC) src/tetris.c $(CFLAGS) -o tetris $(LDFLAGS)
+obj:
+	mkdir -p $@
+
+obj/tetris.o: obj src/tetris.c src/input.h
+	+$(CC) $(CFLAGS) -c src/tetris.c -o obj/tetris.o
+
+tetris: obj/tetris.o
+	+$(CC) $(CFLAGS) obj/tetris.o -o tetris $(LDFLAGS)
 
 clean:
-	rm -f tetris
+	rm -rf tetris obj
 
 .PHONY: all clean

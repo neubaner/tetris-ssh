@@ -136,44 +136,27 @@ static int data_function(ssh_session session, ssh_channel channel, void *data, u
         key_press press = result.press;
 
         printf("Got key ");
-        if ((press.mods & KEY_MOD_CTRL) != 0) {
-            printf("ctrl+");
+        if (press.kind == KEY_KIND_CHAR) {
+            printf("%c\n", press.ch);
+        } else if (press.kind == KEY_KIND_CTRL) {
+            printf("ctrl+%c\n", press.ch);
+        } else {
+            printf("%s\n", key_kind_str(press.kind));
         }
-        if ((press.mods & KEY_MOD_SHIFT) != 0) {
-            printf("shift+");
-        }
-        if ((press.mods & KEY_MOD_ALT) != 0) {
-            printf("alt+");
-        }
-        printf("%s\n", key_sym_str(press.sym));
 
-        int speed = press.mods & KEY_MOD_SHIFT ? 2 : 1;
+        int speed = press.kind == KEY_KIND_CHAR && isupper(press.ch) ? 2 : 1;
 
-        switch(press.sym) {
-        case KEY_SYM_J:
-        case KEY_SYM_ARROW_DOWN:
+        if ((press.kind == KEY_KIND_CHAR && tolower(press.ch) == 'j') || press.kind == KEY_KIND_ARROW_DOWN) {
             y += 1 * speed;
-            break;
-        case KEY_SYM_K:
-        case KEY_SYM_ARROW_UP:
+        } else if ((press.kind == KEY_KIND_CHAR && tolower(press.ch) == 'k') || press.kind == KEY_KIND_ARROW_UP) {
             y -= 1 * speed;
-            break;
-        case KEY_SYM_L:
-        case KEY_SYM_ARROW_RIGHT:
-            x += 1 * speed;
-            break;
-        case KEY_SYM_H:
-        case KEY_SYM_ARROW_LEFT:
+        } else if ((press.kind == KEY_KIND_CHAR && tolower(press.ch) == 'h') || press.kind == KEY_KIND_ARROW_LEFT) {
             x -= 1 * speed;
-            break;
-        case KEY_SYM_C:
-            if ((press.mods & KEY_MOD_CTRL) != 0) {
-                ssh_channel_close(channel);
-                return -1;
-            }
-            break;
-        default:
-            break;
+        } else if ((press.kind == KEY_KIND_CHAR && tolower(press.ch) == 'l') || press.kind == KEY_KIND_ARROW_RIGHT) {
+            x += 1 * speed;
+        } else if (press.kind == KEY_KIND_CTRL && press.ch == 'C') {
+            ssh_channel_close(channel);
+            return -1;
         }
     }
 
