@@ -2,61 +2,9 @@
 #define TETRIS_SSH_INPUT_H
 
 #include <assert.h>
-#include <stdint.h>
 #include <stdbool.h>
 #include <ctype.h>
-
-#define RING_BUF_CAPACITY 64
-#define RING_BUF_MASK(v) ((v) % RING_BUF_CAPACITY)
-
-typedef struct ring_buf {
-    // Reader cursor of the buffer
-    uint8_t head;
-    // Writer cursor of the buffer
-    uint8_t tail;
-    // Contents of the buffer
-    char buffer[RING_BUF_CAPACITY];
-} ring_buf;
-
-uint32_t ring_buf_size(const ring_buf *buf)
-{
-    return buf->tail - buf->head;
-}
-
-bool ring_buf_is_empty(const ring_buf *buf)
-{
-    return buf->head == buf->tail;
-}
-
-bool ring_buf_is_full(const ring_buf *buf)
-{
-    return (buf->tail - buf->head) >= RING_BUF_CAPACITY;
-}
-
-char ring_buf_shift(ring_buf *buf)
-{
-    assert(!ring_buf_is_empty(buf));
-
-    char value = buf->buffer[RING_BUF_MASK(buf->head)];
-    buf->head++;
-
-    return value;
-}
-
-char ring_buf_peak(const ring_buf *buf)
-{
-    assert(!ring_buf_is_empty(buf));
-
-    return buf->buffer[RING_BUF_MASK(buf->head)];
-}
-
-void ring_buf_push(ring_buf *buf, char value)
-{
-    assert(!ring_buf_is_full(buf));
-
-    buf->buffer[RING_BUF_MASK(buf->tail)] = value;
-    buf->tail++;
-}
+#include "ring_buf.h"
 
 #define KEY_KIND_X_MACRO(X) \
     X(KEY_KIND_NO_KEY, "(no key)") \
@@ -161,7 +109,7 @@ key_press_result key_press_read(key_press_reader *reader)
         case KEY_PRESS_STATE_CSI: {
             reader->state = KEY_PRESS_STATE_INITIAL;
 
-            // TODO: Cursor movement might have an parameter
+            // TODO: Cursor movement might have a parameter
             switch (top) {
             case 'A':
                 return (key_press_result) {

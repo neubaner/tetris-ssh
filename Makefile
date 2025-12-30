@@ -1,7 +1,7 @@
 CFLAGS=-std=c99 -Wall -Wextra -Werror -pedantic -ggdb -O3 -flto=auto -fuse-linker-plugin $(shell pkg-config --cflags libssh)
 LDFLAGS=$(shell pkg-config --libs libssh)
 
-all: tetris
+all: tetris tests
 
 obj:
 	mkdir -p $@
@@ -12,7 +12,13 @@ obj/tetris.o: obj src/tetris.c src/input.h
 tetris: obj/tetris.o
 	+$(CC) $(CFLAGS) obj/tetris.o -o tetris $(LDFLAGS)
 
+obj/ring_buf_test: tests/ring_buf_test.c tests/test_lib.h src/ring_buf.h
+	+$(CC) $(CFLAGS) tests/ring_buf_test.c -DTEST_COLOR_OUTPUT -o $@ $(LDFLAGS)
+	./$@
+
+tests: obj/ring_buf_test
+
 clean:
 	rm -rf tetris obj
 
-.PHONY: all clean
+.PHONY: all clean tests
