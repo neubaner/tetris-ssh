@@ -63,7 +63,7 @@ typedef struct key_press_reader {
 // [ansi escape sequences]: https://gist.github.com/fnky/458719343aabd01cfb17a3a4f7296797
 key_press_result key_press_read(key_press_reader *reader)
 {
-    while(true) {
+    for(;;) {
         if (ring_buf_is_empty(&reader->buf)) {
             return (key_press_result){ .needs_more_input = true, };
         }
