@@ -26,6 +26,15 @@ do { \
     } \
 } while(0)
 
+#define test_assert_eq_int(T, left, right) \
+do { \
+    T _left = (left); \
+    T _right = (right); \
+    if (_left != _right) { \
+        test__case_failed(__FILE__, __LINE__, "%d != %d", _left, _right); \
+    } \
+} while(0)
+
 #define test_assert_eq_uint(T, left, right) \
 do { \
     T _left = (left); \

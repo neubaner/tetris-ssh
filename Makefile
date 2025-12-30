@@ -16,7 +16,11 @@ obj/ring_buf_test: tests/ring_buf_test.c tests/test_lib.h src/ring_buf.h
 	+$(CC) $(CFLAGS) tests/ring_buf_test.c -DTEST_COLOR_OUTPUT -o $@ $(LDFLAGS)
 	./$@
 
-tests: obj/ring_buf_test
+obj/input_test: tests/input_test.c tests/test_lib.h src/input.h src/ring_buf.h
+	+$(CC) $(CFLAGS) tests/input_test.c -DTEST_COLOR_OUTPUT -o $@ $(LDFLAGS)
+	./$@
+
+tests: obj/ring_buf_test obj/input_test
 
 clean:
 	rm -rf tetris obj
