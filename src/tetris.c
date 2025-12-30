@@ -3,22 +3,24 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
-#include <pty.h>
-#include <fcntl.h>
-#include <poll.h>
 #include <string.h>
-#include <utmp.h>
-#include <sys/ioctl.h>
 #include <libssh/callbacks.h>
 #include <libssh/libssh.h>
 #include <libssh/server.h>
 #include "input.h"
 
-struct pty_data {
-    struct winsize win_size;
-};
+typedef struct pty_win_size {
+    int width;
+    int height;
+    int px_width;
+    int px_height;
+} pty_win_size;
 
-struct session_ctx {
+typedef struct pty_data {
+    pty_win_size win_size;
+} pty_data;
+
+typedef struct session_ctx {
     ssh_event event;
     ssh_channel channel;
     struct ssh_channel_callbacks_struct channel_cbs;
@@ -26,7 +28,7 @@ struct session_ctx {
     const char *username;
     struct pty_data pty;
     key_press_reader key_reader;
-};
+} session_ctx;
 
 #define ANSI_ERASE_ENTITY_SCREEN "\x1b[2J"
 #define ANSI_CURSOR_HOME_POSITION "\x1b[H"
@@ -69,7 +71,7 @@ static int shell_request(ssh_session session, ssh_channel channel, void *userdat
     (void)channel;
     (void)userdata;
 
-    // struct session_ctx *ctx = (struct session_ctx *)userdata;
+    // session_ctx *ctx = (session_ctx *)userdata;
 
     render(channel, x, y);
 
@@ -77,25 +79,25 @@ static int shell_request(ssh_session session, ssh_channel channel, void *userdat
 }
 
 static int pty_request(ssh_session session,
-                        ssh_channel channel,
-                        const char *term,
-                        int width, int height,
-                        int pxwidth, int pwheight,
-                        void *userdata)
+                       ssh_channel channel,
+                       const char *term,
+                       int width, int height,
+                       int pxwidth, int pxheight,
+                       void *userdata)
 {
     (void)session;
     (void)channel;
 
-    struct session_ctx *ctx = (struct session_ctx *)userdata;
+    session_ctx *ctx = (session_ctx *)userdata;
 
     ctx->pty = (struct pty_data){
-        .win_size.ws_col = width,
-        .win_size.ws_row = height,
-        .win_size.ws_xpixel = pxwidth,
-        .win_size.ws_ypixel = pwheight,
+        .win_size.width = width,
+        .win_size.height = height,
+        .win_size.px_width = pxwidth,
+        .win_size.px_height = pxheight,
     };
 
-    printf("term=%s width=%d height=%d, pxwidth=%d, pwheight=%d\n", term, width, height, pxwidth, pwheight);
+    printf("term=%s width=%d height=%d, pxwidth=%d, pxheight=%d\n", term, width, height, pxwidth, pxheight);
     return SSH_OK;
 }
 
@@ -106,7 +108,7 @@ static int data_function(ssh_session session, ssh_channel channel, void *data, u
     (void)is_stderr;
     (void)userdata;
 
-    struct session_ctx *ctx = (struct session_ctx *)userdata;
+    session_ctx *ctx = (session_ctx *)userdata;
 
     printf("Received %d bytes:", len);
     for (uint32_t i = 0; i < len; i++) {
@@ -165,10 +167,29 @@ static int data_function(ssh_session session, ssh_channel channel, void *data, u
     return i;
 }
 
+static int pty_window_change(ssh_session session,
+                             ssh_channel channel,
+                             int width, int height,
+                             int pxwidth, int pwheight,
+                             void *userdata)
+{
+    (void)session;
+    session_ctx *ctx = (session_ctx *)userdata;
+
+    ctx->pty.win_size.width = width;
+    ctx->pty.win_size.height = height;
+    ctx->pty.win_size.px_width = pxwidth;
+    ctx->pty.win_size.px_height = pwheight;
+
+    printf("resize: width=%d height=%d, pxwidth=%d, pxheight=%d\n", width, height, pxwidth, pwheight);
+    render(channel, x, y);
+
+    return SSH_OK;
+}
 
 static ssh_channel channel_open(ssh_session session, void *userdata)
 {
-    struct session_ctx *ctx = (struct session_ctx *)userdata;
+    session_ctx *ctx = (session_ctx *)userdata;
 
     if (ctx->channel != NULL) {
         // A session can only have a single channel
@@ -181,6 +202,7 @@ static ssh_channel channel_open(ssh_session session, void *userdata)
         .channel_pty_request_function = pty_request,
         .channel_shell_request_function = shell_request,
         .channel_data_function = data_function,
+        .channel_pty_window_change_function = pty_window_change,
     };
 
     ssh_callbacks_init(&ctx->channel_cbs);
@@ -195,7 +217,7 @@ static int pubkey_auth(ssh_session session, const char *user, struct ssh_key_str
     (void)pubkey;
     (void)signature_state;
 
-    struct session_ctx *ctx = (struct session_ctx *)userdata;
+    session_ctx *ctx = (session_ctx *)userdata;
     ctx->username = user;
 
     // Anyone can play :)
@@ -206,7 +228,7 @@ static void handle_session(ssh_session session, ssh_event event)
 {
     ssh_set_auth_methods(session, SSH_AUTH_METHOD_PUBLICKEY);
 
-    struct session_ctx ctx = {
+    session_ctx ctx = {
         .event = event,
     };
 

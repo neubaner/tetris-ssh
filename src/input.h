@@ -47,18 +47,20 @@ typedef struct key_press_result {
     bool needs_more_input;
 } key_press_result ;
 
-typedef enum key_press_state {
-    KEY_PRESS_STATE_INITIAL,
-    KEY_PRESS_STATE_ESCAPE,
-    KEY_PRESS_STATE_CSI,
-} key_press_state;
+typedef enum key_press_reader_state {
+    KEY_PRESS_READER_STATE_INITIAL,
+    KEY_PRESS_READER_STATE_ESCAPE,
+    KEY_PRESS_READER_STATE_CSI,
+} key_press_reader_state;
 
 typedef struct key_press_reader {
     ring_buf buf;
-    key_press_state state;
+    key_press_reader_state state;
 } key_press_reader;
 
-// Reference: https://invisible-island.net/xterm/ctlseqs/ctlseqs.html
+// References:
+// [xterm]: https://invisible-island.net/xterm/ctlseqs/ctlseqs.html
+// [ansi escape sequences]: https://gist.github.com/fnky/458719343aabd01cfb17a3a4f7296797
 key_press_result key_press_read(key_press_reader *reader)
 {
     while(true) {
@@ -69,13 +71,13 @@ key_press_result key_press_read(key_press_reader *reader)
         char top = ring_buf_shift(&reader->buf);
 
         switch(reader->state) {
-        case KEY_PRESS_STATE_INITIAL: {
+        case KEY_PRESS_READER_STATE_INITIAL: {
             switch(top) {
             case '\x1b':
-                reader->state = KEY_PRESS_STATE_ESCAPE;
+                reader->state = KEY_PRESS_READER_STATE_ESCAPE;
                 break;
             case '\x9b':
-                reader->state = KEY_PRESS_STATE_CSI;
+                reader->state = KEY_PRESS_READER_STATE_CSI;
                 break;
             case '\r':
                 return (key_press_result) {
@@ -94,20 +96,20 @@ key_press_result key_press_read(key_press_reader *reader)
                     };
                 } else {
                     // XTerm resets their state machine to the initial state when finding unexcepted charaters.
-                    reader->state = KEY_PRESS_STATE_INITIAL;
+                    reader->state = KEY_PRESS_READER_STATE_INITIAL;
                 }
             }
         } break;
-        case KEY_PRESS_STATE_ESCAPE: {
+        case KEY_PRESS_READER_STATE_ESCAPE: {
             if (top == '[') {
-                reader->state = KEY_PRESS_STATE_CSI;
+                reader->state = KEY_PRESS_READER_STATE_CSI;
             } else {
                 // TODO: Should we handle other escape sequences?
-                reader->state = KEY_PRESS_STATE_INITIAL;
+                reader->state = KEY_PRESS_READER_STATE_INITIAL;
             }
         } break;
-        case KEY_PRESS_STATE_CSI: {
-            reader->state = KEY_PRESS_STATE_INITIAL;
+        case KEY_PRESS_READER_STATE_CSI: {
+            reader->state = KEY_PRESS_READER_STATE_INITIAL;
 
             // TODO: Cursor movement might have a parameter
             switch (top) {
