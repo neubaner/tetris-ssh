@@ -1,5 +1,5 @@
 #include <assert.h>
-#include <stdalign.h>
+#include <errno.h>
 #include <stdatomic.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -10,10 +10,10 @@
 #include <libssh/callbacks.h>
 #include <libssh/libssh.h>
 #include <libssh/server.h>
-#include <threads.h>
-#include "bits/pthreadtypes.h"
+#include <pthread.h>
+
 #include "input.h"
-#include "pthread.h"
+#include "scsp_queue.h"
 
 typedef struct pty_win_size {
     int width;
@@ -232,7 +232,7 @@ static int pubkey_auth(ssh_session session, const char *user, struct ssh_key_str
     return SSH_AUTH_SUCCESS;
 }
 
-static void handle_session(ssh_session session, ssh_event event)
+void handle_session(ssh_session session, ssh_event event)
 {
     ssh_set_auth_methods(session, SSH_AUTH_METHOD_PUBLICKEY);
 
@@ -273,72 +273,77 @@ typedef struct worker_thread {
     size_t id;
     ssh_event event;
 
-    pthread_mutex_t session_mutex;
+    spsc_queue incoming_sessions;
     size_t session_count;
-    // Should only access the session array if you hold the session_mutex
     // TODO: This should be a dynamically sized array
     session_ctx sessions[WORKER_THREAD_SESSION_COUNT_MAX];
     // TODO: This is memory inneficient
     bool sessions_used[WORKER_THREAD_SESSION_COUNT_MAX];
 } worker_thread;
 
-#define SESSION_QUEUE_CAPACITY 16
-#define SESSION_QUEUE_MASK(v) ((v) % SESSION_QUEUE_CAPACITY)
-
-typedef struct session_queue {
-    atomic_size_t head;
-    atomic_size_t tail;
-    ssh_session sessions[SESSION_QUEUE_CAPACITY];
-} session_queue;
-
-static bool session_queue_push(session_queue *queue, ssh_session session)
-{
-    size_t tail = atomic_load_explicit(&queue->tail, memory_order_relaxed);
-    size_t next_tail = tail + 1;
-    size_t head = atomic_load_explicit(&queue->head, memory_order_acquire);
-
-    // The list is full
-    if (tail == head) {
-        return false;
-    }
-    queue->sessions[SESSION_QUEUE_MASK(tail)] = session;
-    atomic_store_explicit(&queue->tail, next_tail, memory_order_release);
-
-    return true;
-}
-
-static bool session_queue_shift(session_queue *queue, ssh_session *session)
-{
-    size_t head = atomic_load_explicit(&queue->head, memory_order_relaxed);
-    size_t next_head = head + 1;
-    size_t tail = atomic_load_explicit(&queue->tail, memory_order_acquire);
-
-    // The list is full
-    if (tail == head) {
-        return false;
-    }
-
-    *session = queue->sessions[SESSION_QUEUE_MASK(head)];
-    atomic_store_explicit(&queue->head, next_head, memory_order_release);
-
-    return true;
-}
-
 static worker_thread worker_threads[WORKER_THREADS_COUNT] = {0};
 
 static void *worker_thread_proc(void *arg)
 {
     worker_thread *thread = (worker_thread *)arg;
-
-    printf("Hello from thread %zu\n", thread->id);
+    bool event_added = false;
 
     for(;;) {
-        // Do not block poll
-        if (ssh_event_dopoll(thread->event, 0) == SSH_ERROR) {
+        ssh_session new_session;
+        while (spsc_queue_shift(&thread->incoming_sessions, (void **)&new_session)) {
+            session_ctx *ctx = NULL;
+            size_t session_idx;
+            for (session_idx = 0; session_idx < WORKER_THREAD_SESSION_COUNT_MAX; session_idx++) {
+                if (!thread->sessions_used[session_idx]) {
+                    thread->sessions_used[session_idx] = true;
+                    thread->sessions[session_idx] = (session_ctx){
+                        .session = new_session
+                    };
+                    ctx = &thread->sessions[session_idx];
+                    break;
+                }
+            }
+
+            if (ctx == NULL) {
+                fprintf(stderr, "No empty session slot found on thread %zu\n", thread->id);
+                ssh_free(ctx->session);
+                continue;
+            }
+
+            printf("Accepted connection on thread %zu \n", thread->id);
+
+            struct ssh_server_callbacks_struct server_cbs = {
+                .userdata = ctx,
+                .channel_open_request_session_function = channel_open,
+                .auth_pubkey_function = pubkey_auth,
+            };
+            ssh_callbacks_init(&server_cbs);
+            ssh_set_server_callbacks(ctx->session, &server_cbs);
+
+            if (ssh_handle_key_exchange(ctx->session) != SSH_OK) {
+                fprintf(stderr, "%s\n", ssh_get_error(ctx->session));
+                ssh_free(ctx->session);
+                thread->sessions_used[session_idx] = false;
+                continue;
+            }
+
+            if (ssh_event_add_session(thread->event, ctx->session) != SSH_OK) {
+                fprintf(stderr, "%s\n", strerror(errno));
+                ssh_free(ctx->session);
+                thread->sessions_used[session_idx] = false;
+                continue;
+            };
+
+            event_added = true;
+        }
+
+        if (event_added && ssh_event_dopoll(thread->event, 0) == SSH_ERROR) {
+            fprintf(stderr, "Event loop error: %s\n", strerror(errno));
             break;
         }
     }
 
+    fprintf(stderr, "Thread %zu exited\n", thread->id);
     ssh_event_free(thread->event);
     return NULL;
 }
@@ -346,12 +351,7 @@ static void *worker_thread_proc(void *arg)
 static void setup_workers(void)
 {
     for (size_t id = 0; id < WORKER_THREADS_COUNT; id++) {
-        pthread_attr_t attr;
         int result;
-        if ((result = pthread_attr_init(&attr)) != 0) {
-            fprintf(stderr, "ERROR: pthread_attr_init %s(%d)", strerror(result), result);
-            exit(EXIT_FAILURE);
-        }
 
         ssh_event event = ssh_event_new();
         if (event == NULL) {
@@ -359,20 +359,11 @@ static void setup_workers(void)
             exit(EXIT_FAILURE);
         }
 
-        if ((result = pthread_mutex_init(&worker_threads[id].session_mutex, NULL)) != 0) {
-            fprintf(stderr, "ERROR: pthread_mutex_init %s(%d)", strerror(result), result);
-            exit(EXIT_FAILURE);
-        }
         worker_threads[id].id = id;
         worker_threads[id].event = event;
 
-        if ((result = pthread_create(&worker_threads[id].thread, &attr, worker_thread_proc, (void *)&worker_threads[id])) != 0) {
+        if ((result = pthread_create(&worker_threads[id].thread, NULL, worker_thread_proc, (void *)&worker_threads[id])) != 0) {
             fprintf(stderr, "ERROR: pthread_create %s(%d)", strerror(result), result);
-            exit(EXIT_FAILURE);
-        }
-
-        if((result = pthread_attr_destroy(&attr)) != 0) {
-            fprintf(stderr, "ERROR: pthread_attr_destroy %s(%d)", strerror(result), result);
             exit(EXIT_FAILURE);
         }
     }
@@ -433,27 +424,11 @@ int main(void)
             return EXIT_FAILURE;
         }
 
-        printf("Accepted connection!\n");
-
-        int pid = fork();
-        if (pid == 0) {
-            ssh_event event = ssh_event_new();
-            if (event == NULL) {
-                fprintf(stderr, "Out of memory\n");
-                ssh_free(session);
-                ssh_bind_free(sshbind);
-                ssh_finalize();
-
-                return EXIT_FAILURE;
-            }
-            handle_session(session, event);
-            ssh_event_free(event);
-
-            ssh_disconnect(session);
+        if (spsc_queue_push(&worker_threads[0].incoming_sessions, session) != 0) {
+            fprintf(stderr, "Failed to push incoming session\n");
+            ssh_bind_free(sshbind);
             ssh_free(session);
-
-            return EXIT_SUCCESS;
-        }
+        };
     }
 
     ssh_bind_free(sshbind);
