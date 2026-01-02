@@ -6,7 +6,7 @@ all: tetris tests
 obj:
 	mkdir -p $@
 
-obj/tetris.o: obj src/tetris.c src/input.h
+obj/tetris.o: obj src/tetris.c src/input.h src/spsc_queue.h src/ring_buf.h
 	+$(CC) $(CFLAGS) -c src/tetris.c -o obj/tetris.o
 
 tetris: obj/tetris.o

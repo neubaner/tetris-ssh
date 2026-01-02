@@ -13,7 +13,7 @@
 #include <pthread.h>
 
 #include "input.h"
-#include "scsp_queue.h"
+#include "spsc_queue.h"
 
 typedef struct pty_win_size {
     int width;
@@ -31,6 +31,7 @@ typedef struct session_ctx {
     ssh_session session;
     ssh_channel channel;
     struct ssh_channel_callbacks_struct channel_cbs;
+    struct ssh_server_callbacks_struct server_cbs;
 
     const char *username;
     struct pty_data pty;
@@ -286,11 +287,10 @@ static worker_thread worker_threads[WORKER_THREADS_COUNT] = {0};
 static void *worker_thread_proc(void *arg)
 {
     worker_thread *thread = (worker_thread *)arg;
-    bool event_added = false;
 
     for(;;) {
         ssh_session new_session;
-        while (spsc_queue_shift(&thread->incoming_sessions, (void **)&new_session)) {
+        while (spsc_queue_shift(&thread->incoming_sessions, (void **)&new_session) == true) {
             session_ctx *ctx = NULL;
             size_t session_idx;
             for (session_idx = 0; session_idx < WORKER_THREAD_SESSION_COUNT_MAX; session_idx++) {
@@ -312,13 +312,13 @@ static void *worker_thread_proc(void *arg)
 
             printf("Accepted connection on thread %zu \n", thread->id);
 
-            struct ssh_server_callbacks_struct server_cbs = {
+            ctx->server_cbs = (struct ssh_server_callbacks_struct){
                 .userdata = ctx,
                 .channel_open_request_session_function = channel_open,
                 .auth_pubkey_function = pubkey_auth,
             };
-            ssh_callbacks_init(&server_cbs);
-            ssh_set_server_callbacks(ctx->session, &server_cbs);
+            ssh_callbacks_init(&ctx->server_cbs);
+            ssh_set_server_callbacks(ctx->session, &ctx->server_cbs);
 
             if (ssh_handle_key_exchange(ctx->session) != SSH_OK) {
                 fprintf(stderr, "%s\n", ssh_get_error(ctx->session));
@@ -333,19 +333,10 @@ static void *worker_thread_proc(void *arg)
                 thread->sessions_used[session_idx] = false;
                 continue;
             };
-
-            event_added = true;
         }
 
-        if (event_added && ssh_event_dopoll(thread->event, 0) == SSH_ERROR) {
-            fprintf(stderr, "Event loop error: %s\n", strerror(errno));
-            break;
-        }
+        ssh_event_dopoll(thread->event, 0);
     }
-
-    fprintf(stderr, "Thread %zu exited\n", thread->id);
-    ssh_event_free(thread->event);
-    return NULL;
 }
 
 static void setup_workers(void)
@@ -421,10 +412,10 @@ int main(void)
 
             ssh_bind_free(sshbind);
             ssh_free(session);
-            return EXIT_FAILURE;
+            continue;
         }
 
-        if (spsc_queue_push(&worker_threads[0].incoming_sessions, session) != 0) {
+        while (spsc_queue_push(&worker_threads[0].incoming_sessions, session) != true) {
             fprintf(stderr, "Failed to push incoming session\n");
             ssh_bind_free(sshbind);
             ssh_free(session);

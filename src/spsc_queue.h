@@ -14,6 +14,10 @@ typedef struct spsc_queue {
 } spsc_queue;
 
 static bool spsc_queue__is_full(size_t head, size_t tail) {
+    return (tail - head) >= SESSION_QUEUE_CAPACITY;
+}
+
+static bool spsc_queue__is_empty(size_t head, size_t tail) {
     return tail == head;
 }
 
@@ -39,7 +43,7 @@ bool spsc_queue_shift(spsc_queue *queue, void **item)
     size_t next_head = head + 1;
     size_t tail = atomic_load_explicit(&queue->tail, memory_order_acquire);
 
-    if (spsc_queue__is_full(head, tail)) {
+    if (spsc_queue__is_empty(head, tail)) {
         return false;
     }
 
