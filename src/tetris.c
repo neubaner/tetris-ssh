@@ -409,15 +409,12 @@ int main(void)
 
         if (ssh_bind_accept(sshbind, session) != SSH_OK) {
             fprintf(stderr, "Failed to accept session: %s\n", ssh_get_error(sshbind));
-
-            ssh_bind_free(sshbind);
             ssh_free(session);
             continue;
         }
 
         while (spsc_queue_push(&worker_threads[0].incoming_sessions, session) != true) {
             fprintf(stderr, "Failed to push incoming session\n");
-            ssh_bind_free(sshbind);
             ssh_free(session);
         };
     }
