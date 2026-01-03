@@ -1,6 +1,6 @@
 #include <assert.h>
+#include <limits.h>
 #include <errno.h>
-#include <stdatomic.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -26,17 +26,44 @@ typedef struct pty_data {
     pty_win_size win_size;
 } pty_data;
 
+typedef enum session_status {
+    SESSION_STATUS_UNKNOWN,
+    SESSION_STATUS_ALIVE,
+    SESSION_STATUS_CLOSING,
+    SESSION_STATUS_DEAD,
+} session_status;
+
 typedef struct session_ctx {
-    size_t next_free;
     ssh_session session;
     ssh_channel channel;
+    size_t thread_id;
+    size_t session_id;
     struct ssh_channel_callbacks_struct channel_cbs;
     struct ssh_server_callbacks_struct server_cbs;
 
     const char *username;
-    struct pty_data pty;
     key_press_reader key_reader;
+    struct pty_data pty;
+    session_status status;
 } session_ctx;
+
+#define WORKER_THREADS_COUNT 8
+#define WORKER_THREAD_SESSION_COUNT_MAX 1024
+
+typedef struct worker_thread {
+    pthread_t thread;
+    size_t id;
+    ssh_event event;
+
+    spsc_queue incoming_sessions;
+    size_t sessions_count;
+    // TODO: This should be a dynamically sized array
+    session_ctx sessions[WORKER_THREAD_SESSION_COUNT_MAX];
+    // TODO: This is memory inneficient
+    bool sessions_used[WORKER_THREAD_SESSION_COUNT_MAX];
+} worker_thread;
+
+static worker_thread worker_threads[WORKER_THREADS_COUNT] = {0};
 
 #define ANSI_ERASE_ENTITY_SCREEN "\x1b[2J"
 #define ANSI_CURSOR_HOME_POSITION "\x1b[H"
@@ -45,7 +72,7 @@ typedef struct session_ctx {
 static int x = 0;
 static int y = 0;
 
-static void render(ssh_channel channel, int x, int y)
+void render(ssh_channel channel, int x, int y)
 {
     char buffer[1024] = {0};
     char *cursor = buffer;
@@ -81,7 +108,7 @@ static int shell_request(ssh_session session, ssh_channel channel, void *userdat
 
     // session_ctx *ctx = (session_ctx *)userdata;
 
-    render(channel, x, y);
+    // render(channel, x, y);
 
     return SSH_OK;
 }
@@ -125,54 +152,14 @@ static int data_function(ssh_session session, ssh_channel channel, void *data, u
     printf("\n");
 
     char *chars = (char *)data;
-    uint32_t i;
-    for (i = 0; i < len; i++) {
-        char c = chars[i];
-
-        if (ring_buf_is_full(&ctx->key_reader.buf)) {
-            break;
-        }
-
-        ring_buf_push(&ctx->key_reader.buf, c);
+    uint32_t read;
+    for (read = 0; read < len && !ring_buf_is_full(&ctx->key_reader.buf); read++) {
+        ring_buf_push(&ctx->key_reader.buf, chars[read]);
     }
 
-    while (!ring_buf_is_empty(&ctx->key_reader.buf)) {
-        key_press_result result = key_press_read(&ctx->key_reader);
+    // render(channel, x, y);
 
-        if (result.needs_more_input) {
-            break;
-        }
-
-        key_press press = result.press;
-
-        printf("Got key ");
-        if (press.kind == KEY_KIND_CHAR) {
-            printf("%c\n", press.ch);
-        } else if (press.kind == KEY_KIND_CTRL) {
-            printf("ctrl+%c\n", press.ch);
-        } else {
-            printf("%s\n", key_kind_str(press.kind));
-        }
-
-        int speed = press.kind == KEY_KIND_CHAR && isupper(press.ch) ? 2 : 1;
-
-        if ((press.kind == KEY_KIND_CHAR && tolower(press.ch) == 'j') || press.kind == KEY_KIND_ARROW_DOWN) {
-            y += 1 * speed;
-        } else if ((press.kind == KEY_KIND_CHAR && tolower(press.ch) == 'k') || press.kind == KEY_KIND_ARROW_UP) {
-            y -= 1 * speed;
-        } else if ((press.kind == KEY_KIND_CHAR && tolower(press.ch) == 'h') || press.kind == KEY_KIND_ARROW_LEFT) {
-            x -= 1 * speed;
-        } else if ((press.kind == KEY_KIND_CHAR && tolower(press.ch) == 'l') || press.kind == KEY_KIND_ARROW_RIGHT) {
-            x += 1 * speed;
-        } else if (press.kind == KEY_KIND_CTRL && press.ch == 'C') {
-            ssh_channel_close(channel);
-            return -1;
-        }
-    }
-
-    render(channel, x, y);
-
-    return i;
+    return read;
 }
 
 static int pty_window_change(ssh_session session,
@@ -182,6 +169,7 @@ static int pty_window_change(ssh_session session,
                              void *userdata)
 {
     (void)session;
+    (void)channel;
     session_ctx *ctx = (session_ctx *)userdata;
 
     ctx->pty.win_size.width = width;
@@ -190,7 +178,7 @@ static int pty_window_change(ssh_session session,
     ctx->pty.win_size.px_height = pwheight;
 
     printf("resize: width=%d height=%d, pxwidth=%d, pxheight=%d\n", width, height, pxwidth, pwheight);
-    render(channel, x, y);
+    // render(channel, x, y);
 
     return SSH_OK;
 }
@@ -233,57 +221,6 @@ static int pubkey_auth(ssh_session session, const char *user, struct ssh_key_str
     return SSH_AUTH_SUCCESS;
 }
 
-void handle_session(ssh_session session, ssh_event event)
-{
-    ssh_set_auth_methods(session, SSH_AUTH_METHOD_PUBLICKEY);
-
-    session_ctx ctx = {
-        .session = session,
-    };
-
-    struct ssh_server_callbacks_struct server_cbs = {
-        .userdata = &ctx,
-        .channel_open_request_session_function = channel_open,
-        .auth_pubkey_function = pubkey_auth,
-    };
-    ssh_callbacks_init(&server_cbs);
-    ssh_set_server_callbacks(session, &server_cbs);
-
-    if (ssh_handle_key_exchange(session) != SSH_OK) {
-        fprintf(stderr, "%s", ssh_get_error(session));
-        return;
-    }
-
-    ssh_event_add_session(event, session);
-
-    for(;;) {
-        if (ssh_event_dopoll(event, -1) == SSH_ERROR) {
-            ssh_channel_close(ctx.channel);
-            break;
-        }
-    }
-
-    ssh_channel_free(ctx.channel);
-}
-
-#define WORKER_THREADS_COUNT 8
-#define WORKER_THREAD_SESSION_COUNT_MAX 1024
-
-typedef struct worker_thread {
-    pthread_t thread;
-    size_t id;
-    ssh_event event;
-
-    spsc_queue incoming_sessions;
-    size_t session_count;
-    // TODO: This should be a dynamically sized array
-    session_ctx sessions[WORKER_THREAD_SESSION_COUNT_MAX];
-    // TODO: This is memory inneficient
-    bool sessions_used[WORKER_THREAD_SESSION_COUNT_MAX];
-} worker_thread;
-
-static worker_thread worker_threads[WORKER_THREADS_COUNT] = {0};
-
 static void *worker_thread_proc(void *arg)
 {
     worker_thread *thread = (worker_thread *)arg;
@@ -292,14 +229,16 @@ static void *worker_thread_proc(void *arg)
         ssh_session new_session;
         while (spsc_queue_shift(&thread->incoming_sessions, (void **)&new_session) == true) {
             session_ctx *ctx = NULL;
-            size_t session_idx;
-            for (session_idx = 0; session_idx < WORKER_THREAD_SESSION_COUNT_MAX; session_idx++) {
-                if (!thread->sessions_used[session_idx]) {
-                    thread->sessions_used[session_idx] = true;
-                    thread->sessions[session_idx] = (session_ctx){
-                        .session = new_session
+            size_t session_id;
+            for (session_id = 0; session_id < WORKER_THREAD_SESSION_COUNT_MAX; session_id++) {
+                if (!thread->sessions_used[session_id]) {
+                    thread->sessions[session_id] = (session_ctx){
+                        .session = new_session,
+                        .thread_id = thread->id,
+                        .session_id = session_id,
+                        .status = SESSION_STATUS_ALIVE,
                     };
-                    ctx = &thread->sessions[session_idx];
+                    ctx = &thread->sessions[session_id];
                     break;
                 }
             }
@@ -323,20 +262,91 @@ static void *worker_thread_proc(void *arg)
             if (ssh_handle_key_exchange(ctx->session) != SSH_OK) {
                 fprintf(stderr, "%s\n", ssh_get_error(ctx->session));
                 ssh_free(ctx->session);
-                thread->sessions_used[session_idx] = false;
+                thread->sessions[session_id] = (session_ctx){0};
                 continue;
             }
 
             if (ssh_event_add_session(thread->event, ctx->session) != SSH_OK) {
                 fprintf(stderr, "%s\n", strerror(errno));
                 ssh_free(ctx->session);
-                thread->sessions_used[session_idx] = false;
+                thread->sessions[session_id] = (session_ctx){0};
                 continue;
             };
+
+            thread->sessions_used[session_id] = true;
+            thread->sessions_count++;
         }
 
-        ssh_event_dopoll(thread->event, 0);
+        // TODO: We should not syncronize all players in the same event loop
+        ssh_event_dopoll(thread->event, -1);
+
+        for (int i = 0; i < WORKER_THREAD_SESSION_COUNT_MAX; i++) {
+            if (thread->sessions_used[i]) {
+                session_ctx *ctx = &thread->sessions[i];
+
+                if (ctx->status == SESSION_STATUS_CLOSING) {
+                    printf("Closing...\n");
+                    ssh_channel_send_eof(ctx->channel);
+                    ssh_channel_request_send_exit_status(ctx->channel, 0);
+                    ssh_channel_close(ctx->channel);
+                    ctx->status = SESSION_STATUS_DEAD;
+                }
+
+                if (ctx->status == SESSION_STATUS_DEAD) {
+                    printf("Killing %d...\n", ssh_get_status(ctx->session));
+                    // TODO: We should have a timeout to forcelly close the connection.
+                    if ((ssh_get_status(ctx->session) & (SSH_CLOSED | SSH_CLOSED_ERROR)) != 0) {
+                        printf("Freaking killed!\n");
+                        ssh_disconnect(ctx->session);
+                        ssh_free(ctx->session);
+                        thread->sessions_used[ctx->session_id] = false;
+                        thread->sessions_count--;
+                        thread->sessions[ctx->session_id] = (session_ctx){0};
+                    }
+                }
+
+                if (ctx->status == SESSION_STATUS_ALIVE) {
+                    while (!ring_buf_is_empty(&ctx->key_reader.buf)) {
+                        key_press_result result = key_press_read(&ctx->key_reader);
+
+                        if (result.needs_more_input) {
+                            break;
+                        }
+
+                        key_press press = result.press;
+
+                        printf("Got key ");
+                        if (press.kind == KEY_KIND_CHAR) {
+                            printf("'%c'\n", press.ch);
+                        } else if (press.kind == KEY_KIND_CTRL) {
+                            printf("ctrl+'%c'\n", press.ch);
+                        } else {
+                            printf("%s\n", key_kind_str(press.kind));
+                        }
+
+                        int speed = press.kind == KEY_KIND_CHAR && isupper(press.ch) ? 2 : 1;
+
+                        if ((press.kind == KEY_KIND_CHAR && tolower(press.ch) == 'j') || press.kind == KEY_KIND_ARROW_DOWN) {
+                            y += 1 * speed;
+                        } else if ((press.kind == KEY_KIND_CHAR && tolower(press.ch) == 'k') || press.kind == KEY_KIND_ARROW_UP) {
+                            y -= 1 * speed;
+                        } else if ((press.kind == KEY_KIND_CHAR && tolower(press.ch) == 'h') || press.kind == KEY_KIND_ARROW_LEFT) {
+                            x -= 1 * speed;
+                        } else if ((press.kind == KEY_KIND_CHAR && tolower(press.ch) == 'l') || press.kind == KEY_KIND_ARROW_RIGHT) {
+                            x += 1 * speed;
+                        } else if (press.kind == KEY_KIND_CTRL && press.ch == 'C') {
+                            ctx->status = SESSION_STATUS_CLOSING;
+                        }
+                    }
+
+                    // render(ctx->channel, x, y);
+                }
+            }
+        }
     }
+
+    ssh_event_free(thread->event);
+    return NULL;
 }
 
 static void setup_workers(void)
@@ -413,7 +423,16 @@ int main(void)
             continue;
         }
 
-        while (spsc_queue_push(&worker_threads[0].incoming_sessions, session) != true) {
+        int thread_index = 0;
+        for (int i = 0, min = INT_MAX; i < WORKER_THREADS_COUNT; i++) {
+            int session_count = worker_threads[i].sessions_count;
+            if (session_count < min) {
+                thread_index = i;
+                min = session_count;
+            }
+        }
+
+        while (spsc_queue_push(&worker_threads[thread_index].incoming_sessions, session) != true) {
             fprintf(stderr, "Failed to push incoming session\n");
             ssh_free(session);
         };
