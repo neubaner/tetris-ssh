@@ -2,7 +2,6 @@
 #include <limits.h>
 #include <errno.h>
 #include <stddef.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -11,43 +10,14 @@
 #include <libssh/libssh.h>
 #include <libssh/server.h>
 #include <pthread.h>
+#include <threads.h>
 
+#include "session.h"
 #include "input.h"
+#include "session_manager.h"
 #include "spsc_queue.h"
 
-typedef struct pty_win_size {
-    int width;
-    int height;
-    int px_width;
-    int px_height;
-} pty_win_size;
-
-typedef struct pty_data {
-    pty_win_size win_size;
-} pty_data;
-
-typedef enum session_status {
-    SESSION_STATUS_UNKNOWN,
-    SESSION_STATUS_ALIVE,
-    SESSION_STATUS_CLOSING,
-    SESSION_STATUS_DEAD,
-} session_status;
-
-typedef struct session_ctx {
-    ssh_session session;
-    ssh_channel channel;
-    size_t thread_id;
-    size_t session_id;
-    struct ssh_channel_callbacks_struct channel_cbs;
-    struct ssh_server_callbacks_struct server_cbs;
-
-    const char *username;
-    key_press_reader key_reader;
-    struct pty_data pty;
-    session_status status;
-} session_ctx;
-
-#define WORKER_THREADS_COUNT 8
+#define WORKER_THREADS_COUNT 1
 #define WORKER_THREAD_SESSION_COUNT_MAX 1024
 
 typedef struct worker_thread {
@@ -56,170 +26,10 @@ typedef struct worker_thread {
     ssh_event event;
 
     spsc_queue incoming_sessions;
-    size_t sessions_count;
-    // TODO: This should be a dynamically sized array
-    session_ctx sessions[WORKER_THREAD_SESSION_COUNT_MAX];
-    // TODO: This is memory inneficient
-    bool sessions_used[WORKER_THREAD_SESSION_COUNT_MAX];
+    session_manager session_manager;
 } worker_thread;
 
 static worker_thread worker_threads[WORKER_THREADS_COUNT] = {0};
-
-#define ANSI_ERASE_ENTITY_SCREEN "\x1b[2J"
-#define ANSI_CURSOR_HOME_POSITION "\x1b[H"
-#define ANSI_HIDE_CURSOR "\x1b[?25l"
-
-static int x = 0;
-static int y = 0;
-
-void render(ssh_channel channel, int x, int y)
-{
-    char buffer[1024] = {0};
-    char *cursor = buffer;
-
-    memcpy(cursor, ANSI_ERASE_ENTITY_SCREEN, sizeof(ANSI_ERASE_ENTITY_SCREEN) - 1); cursor += sizeof(ANSI_ERASE_ENTITY_SCREEN) - 1;
-    memcpy(cursor, ANSI_CURSOR_HOME_POSITION, sizeof(ANSI_CURSOR_HOME_POSITION) - 1); cursor += sizeof(ANSI_CURSOR_HOME_POSITION) - 1;
-    memcpy(cursor, ANSI_HIDE_CURSOR, sizeof(ANSI_HIDE_CURSOR) - 1); cursor += sizeof(ANSI_HIDE_CURSOR) - 1;
-
-    for (int i = 0; i < x; i++) {
-        // Arrow right
-        memcpy(cursor, "\x1b[C", 3);
-        cursor += 3;
-    }
-
-    for (int i = 0; i < y; i++) {
-        // Arrow down
-        memcpy(cursor, "\x1b[B", 3);
-        cursor += 3;
-    }
-
-    const char hello_world[] = "\x1b[1;4;31;44mHello world!\x1b[0mReset?\r\n";
-    memcpy(cursor, hello_world, sizeof(hello_world) - 1);
-    cursor += sizeof(hello_world) - 1;
-
-    ssh_channel_write(channel, buffer, (uint32_t)(cursor - buffer));
-}
-
-static int shell_request(ssh_session session, ssh_channel channel, void *userdata)
-{
-    (void)session;
-    (void)channel;
-    (void)userdata;
-
-    // session_ctx *ctx = (session_ctx *)userdata;
-
-    // render(channel, x, y);
-
-    return SSH_OK;
-}
-
-static int pty_request(ssh_session session,
-                       ssh_channel channel,
-                       const char *term,
-                       int width, int height,
-                       int pxwidth, int pxheight,
-                       void *userdata)
-{
-    (void)session;
-    (void)channel;
-
-    session_ctx *ctx = (session_ctx *)userdata;
-
-    ctx->pty = (struct pty_data){
-        .win_size.width = width,
-        .win_size.height = height,
-        .win_size.px_width = pxwidth,
-        .win_size.px_height = pxheight,
-    };
-
-    printf("term=%s width=%d height=%d, pxwidth=%d, pxheight=%d\n", term, width, height, pxwidth, pxheight);
-    return SSH_OK;
-}
-
-static int data_function(ssh_session session, ssh_channel channel, void *data, uint32_t len, int is_stderr, void *userdata)
-{
-    (void)channel;
-    (void)session;
-    (void)is_stderr;
-    (void)userdata;
-
-    session_ctx *ctx = (session_ctx *)userdata;
-
-    printf("Received %d bytes:", len);
-    for (uint32_t i = 0; i < len; i++) {
-        printf("%02X", ((unsigned char *)data)[i]);
-    }
-    printf("\n");
-
-    char *chars = (char *)data;
-    uint32_t read;
-    for (read = 0; read < len && !ring_buf_is_full(&ctx->key_reader.buf); read++) {
-        ring_buf_push(&ctx->key_reader.buf, chars[read]);
-    }
-
-    // render(channel, x, y);
-
-    return read;
-}
-
-static int pty_window_change(ssh_session session,
-                             ssh_channel channel,
-                             int width, int height,
-                             int pxwidth, int pwheight,
-                             void *userdata)
-{
-    (void)session;
-    (void)channel;
-    session_ctx *ctx = (session_ctx *)userdata;
-
-    ctx->pty.win_size.width = width;
-    ctx->pty.win_size.height = height;
-    ctx->pty.win_size.px_width = pxwidth;
-    ctx->pty.win_size.px_height = pwheight;
-
-    printf("resize: width=%d height=%d, pxwidth=%d, pxheight=%d\n", width, height, pxwidth, pwheight);
-    // render(channel, x, y);
-
-    return SSH_OK;
-}
-
-static ssh_channel channel_open(ssh_session session, void *userdata)
-{
-    session_ctx *ctx = (session_ctx *)userdata;
-
-    if (ctx->channel != NULL) {
-        // A session can only have a single channel
-        return NULL;
-    }
-
-    ctx->channel = ssh_channel_new(session);
-    ctx->channel_cbs = (struct ssh_channel_callbacks_struct){
-        .userdata = ctx,
-        .channel_pty_request_function = pty_request,
-        .channel_shell_request_function = shell_request,
-        .channel_data_function = data_function,
-        .channel_pty_window_change_function = pty_window_change,
-    };
-
-    ssh_callbacks_init(&ctx->channel_cbs);
-    ssh_set_channel_callbacks(ctx->channel, &ctx->channel_cbs);
-
-    return ctx->channel;
-}
-
-static int pubkey_auth(ssh_session session, const char *user, struct ssh_key_struct *pubkey, char signature_state, void *userdata)
-{
-    (void)session;
-    (void)pubkey;
-    (void)signature_state;
-
-    // TODO: is this really all we need to so for our use case?
-    session_ctx *ctx = (session_ctx *)userdata;
-    ctx->username = user;
-
-    // Anyone can play :)
-    return SSH_AUTH_SUCCESS;
-}
 
 static void *worker_thread_proc(void *arg)
 {
@@ -227,21 +37,8 @@ static void *worker_thread_proc(void *arg)
 
     for(;;) {
         ssh_session new_session;
-        while (spsc_queue_shift(&thread->incoming_sessions, (void **)&new_session) == true) {
-            session_ctx *ctx = NULL;
-            size_t session_id;
-            for (session_id = 0; session_id < WORKER_THREAD_SESSION_COUNT_MAX; session_id++) {
-                if (!thread->sessions_used[session_id]) {
-                    thread->sessions[session_id] = (session_ctx){
-                        .session = new_session,
-                        .thread_id = thread->id,
-                        .session_id = session_id,
-                        .status = SESSION_STATUS_ALIVE,
-                    };
-                    ctx = &thread->sessions[session_id];
-                    break;
-                }
-            }
+        while (spsc_queue_shift(&thread->incoming_sessions, (void **)&new_session)) {
+            session_ctx *ctx = session_manager_add(&thread->session_manager, new_session);
 
             if (ctx == NULL) {
                 fprintf(stderr, "No empty session slot found on thread %zu\n", thread->id);
@@ -249,98 +46,86 @@ static void *worker_thread_proc(void *arg)
                 continue;
             }
 
-            printf("Accepted connection on thread %zu \n", thread->id);
+            printf("Accepted connection on thread %zu and slot %zu\n", thread->id, ctx->session_idx);
 
-            ctx->server_cbs = (struct ssh_server_callbacks_struct){
-                .userdata = ctx,
-                .channel_open_request_session_function = channel_open,
-                .auth_pubkey_function = pubkey_auth,
-            };
-            ssh_callbacks_init(&ctx->server_cbs);
-            ssh_set_server_callbacks(ctx->session, &ctx->server_cbs);
-
+            // TODO: Does this block for the session?
             if (ssh_handle_key_exchange(ctx->session) != SSH_OK) {
                 fprintf(stderr, "%s\n", ssh_get_error(ctx->session));
                 ssh_free(ctx->session);
-                thread->sessions[session_id] = (session_ctx){0};
+                session_manager_remove(&thread->session_manager, ctx->session_idx);
                 continue;
             }
 
             if (ssh_event_add_session(thread->event, ctx->session) != SSH_OK) {
                 fprintf(stderr, "%s\n", strerror(errno));
                 ssh_free(ctx->session);
-                thread->sessions[session_id] = (session_ctx){0};
+                session_manager_remove(&thread->session_manager, ctx->session_idx);
                 continue;
             };
-
-            thread->sessions_used[session_id] = true;
-            thread->sessions_count++;
         }
 
         // TODO: We should not syncronize all players in the same event loop
-        ssh_event_dopoll(thread->event, -1);
+        ssh_event_dopoll(thread->event, 0);
 
-        for (int i = 0; i < WORKER_THREAD_SESSION_COUNT_MAX; i++) {
-            if (thread->sessions_used[i]) {
-                session_ctx *ctx = &thread->sessions[i];
+        for (size_t idx = 0; idx < thread->session_manager.sessions_count; idx++) {
+            session_ctx *ctx = &thread->session_manager.sessions[idx];
 
-                if (ctx->status == SESSION_STATUS_CLOSING) {
-                    printf("Closing...\n");
-                    ssh_channel_send_eof(ctx->channel);
-                    ssh_channel_request_send_exit_status(ctx->channel, 0);
-                    ssh_channel_close(ctx->channel);
-                    ctx->status = SESSION_STATUS_DEAD;
+            if (ctx->status == SESSION_STATUS_CLOSING) {
+                printf("Closing...\n");
+                ssh_channel_send_eof(ctx->channel);
+                ssh_channel_request_send_exit_status(ctx->channel, 0);
+                ssh_channel_close(ctx->channel);
+                ssh_channel_free(ctx->channel);
+                ctx->status = SESSION_STATUS_DEAD;
+            }
+
+            if (ctx->status == SESSION_STATUS_DEAD) {
+                printf("Killing %d...\n", ssh_get_status(ctx->session));
+                // TODO: We should have a timeout to forcelly close the connection.
+                if ((ssh_get_status(ctx->session) & (SSH_CLOSED | SSH_CLOSED_ERROR)) != 0) {
+                    printf("Freaking killed!\n");
+                    ssh_disconnect(ctx->session);
+                    ssh_event_remove_session(thread->event, ctx->session);
+                    ssh_free(ctx->session);
+                    session_manager_remove(&thread->session_manager, idx);
                 }
+            }
 
-                if (ctx->status == SESSION_STATUS_DEAD) {
-                    printf("Killing %d...\n", ssh_get_status(ctx->session));
-                    // TODO: We should have a timeout to forcelly close the connection.
-                    if ((ssh_get_status(ctx->session) & (SSH_CLOSED | SSH_CLOSED_ERROR)) != 0) {
-                        printf("Freaking killed!\n");
-                        ssh_disconnect(ctx->session);
-                        ssh_free(ctx->session);
-                        thread->sessions_used[ctx->session_id] = false;
-                        thread->sessions_count--;
-                        thread->sessions[ctx->session_id] = (session_ctx){0};
+            if (ctx->status == SESSION_STATUS_ALIVE) {
+                while (!ring_buf_is_empty(&ctx->key_reader.buf)) {
+                    key_press_result result = key_press_read(&ctx->key_reader);
+
+                    if (result.needs_more_input) {
+                        break;
+                    }
+
+                    key_press press = result.press;
+
+                    printf("Got key ");
+                    if (press.kind == KEY_KIND_CHAR) {
+                        printf("'%c'\n", press.ch);
+                    } else if (press.kind == KEY_KIND_CTRL) {
+                        printf("ctrl+'%c'\n", press.ch);
+                    } else {
+                        printf("%s\n", key_kind_str(press.kind));
+                    }
+
+                    int speed = press.kind == KEY_KIND_CHAR && isupper(press.ch) ? 2 : 1;
+
+                    if ((press.kind == KEY_KIND_CHAR && tolower(press.ch) == 'j') || press.kind == KEY_KIND_ARROW_DOWN) {
+                        y += 1 * speed;
+                    } else if ((press.kind == KEY_KIND_CHAR && tolower(press.ch) == 'k') || press.kind == KEY_KIND_ARROW_UP) {
+                        y -= 1 * speed;
+                    } else if ((press.kind == KEY_KIND_CHAR && tolower(press.ch) == 'h') || press.kind == KEY_KIND_ARROW_LEFT) {
+                        x -= 1 * speed;
+                    } else if ((press.kind == KEY_KIND_CHAR && tolower(press.ch) == 'l') || press.kind == KEY_KIND_ARROW_RIGHT) {
+                        x += 1 * speed;
+                    } else if (press.kind == KEY_KIND_CTRL && press.ch == 'C') {
+                        ctx->status = SESSION_STATUS_CLOSING;
                     }
                 }
 
-                if (ctx->status == SESSION_STATUS_ALIVE) {
-                    while (!ring_buf_is_empty(&ctx->key_reader.buf)) {
-                        key_press_result result = key_press_read(&ctx->key_reader);
-
-                        if (result.needs_more_input) {
-                            break;
-                        }
-
-                        key_press press = result.press;
-
-                        printf("Got key ");
-                        if (press.kind == KEY_KIND_CHAR) {
-                            printf("'%c'\n", press.ch);
-                        } else if (press.kind == KEY_KIND_CTRL) {
-                            printf("ctrl+'%c'\n", press.ch);
-                        } else {
-                            printf("%s\n", key_kind_str(press.kind));
-                        }
-
-                        int speed = press.kind == KEY_KIND_CHAR && isupper(press.ch) ? 2 : 1;
-
-                        if ((press.kind == KEY_KIND_CHAR && tolower(press.ch) == 'j') || press.kind == KEY_KIND_ARROW_DOWN) {
-                            y += 1 * speed;
-                        } else if ((press.kind == KEY_KIND_CHAR && tolower(press.ch) == 'k') || press.kind == KEY_KIND_ARROW_UP) {
-                            y -= 1 * speed;
-                        } else if ((press.kind == KEY_KIND_CHAR && tolower(press.ch) == 'h') || press.kind == KEY_KIND_ARROW_LEFT) {
-                            x -= 1 * speed;
-                        } else if ((press.kind == KEY_KIND_CHAR && tolower(press.ch) == 'l') || press.kind == KEY_KIND_ARROW_RIGHT) {
-                            x += 1 * speed;
-                        } else if (press.kind == KEY_KIND_CTRL && press.ch == 'C') {
-                            ctx->status = SESSION_STATUS_CLOSING;
-                        }
-                    }
-
-                    // render(ctx->channel, x, y);
-                }
+                // render(ctx->channel, x, y);
             }
         }
     }
@@ -425,7 +210,7 @@ int main(void)
 
         int thread_index = 0;
         for (int i = 0, min = INT_MAX; i < WORKER_THREADS_COUNT; i++) {
-            int session_count = worker_threads[i].sessions_count;
+            int session_count = worker_threads[i].session_manager.sessions_count;
             if (session_count < min) {
                 thread_index = i;
                 min = session_count;
