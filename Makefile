@@ -1,4 +1,4 @@
-CFLAGS=-std=c11 -Wall -Wextra -Werror -pedantic -ggdb -O3 -flto=auto -fuse-linker-plugin $(shell pkg-config --cflags libssh)
+CFLAGS=-std=c11 -Wall -Wextra -Werror -pedantic -ggdb -O3 $(shell pkg-config --cflags libssh)
 LDFLAGS=$(shell pkg-config --libs libssh) -lpthread
 
 all: tetris tests

@@ -22,6 +22,7 @@
 #include "spsc_queue.h"
 #include "renderer.h"
 
+#define GAME_DT_MS (1000 / 30)
 #define WORKER_THREADS_COUNT 8
 #define WORKER_THREAD_SESSION_COUNT_MAX 1024
 
@@ -43,6 +44,18 @@ typedef struct worker_thread {
 } worker_thread;
 
 static worker_thread worker_threads[WORKER_THREADS_COUNT] = {0};
+
+void print_ansii(const char *buffer, size_t size) {
+
+    for (size_t i = 0; i < size; i++) {
+        char c = buffer[i];
+        if (isprint(c)) {
+            printf("%c", c);
+        } else {
+            printf("\\x%02x", c);
+        }
+    }
+}
 
 static void *worker_thread_proc(void *arg)
 {
@@ -89,16 +102,16 @@ static void *worker_thread_proc(void *arg)
             poll_timeout = (next_frame_min_timestamp - timestamp) / (2 * 1000);
             // Clamp the value to INT_MAX to prevent overflow
             poll_timeout = poll_timeout > INT_MAX ? INT_MAX : poll_timeout;
-            // If the next frame will happen in the next 16 milliseconds, wait for a single millisecond.
+            // If the next frame will happen in the next GAME_DT_MS milliseconds, wait for a single millisecond.
             // I'm not sure if with a large number of players this can be problematically...
-            poll_timeout = poll_timeout <= 16 ? 1 : poll_timeout;
+            poll_timeout = poll_timeout <= GAME_DT_MS ? 1 : poll_timeout;
         }
 
         if(ssh_event_dopoll(thread->event, (int)poll_timeout) == SSH_ERROR) {
             // If dopoll fails it means no session is attached to the event loop, we should just
             // wait for a frame and try later and try again later
             struct timespec sleep_duration = {
-                .tv_nsec = 16 * 1000,
+                .tv_nsec = GAME_DT_MS * 1000,
                 .tv_sec = 0,
             };
             nanosleep(&sleep_duration, NULL);
@@ -106,7 +119,7 @@ static void *worker_thread_proc(void *arg)
 
         timestamp = get_nanos();
         // 60 FPS
-        uint64_t next_timestamp = timestamp + 16 * 1000;
+        uint64_t next_timestamp = timestamp + GAME_DT_MS * 1000;
         for (size_t idx = 0; idx < thread->session_manager.sessions_count; idx++) {
             session_ctx *ctx = &thread->session_manager.sessions[idx];
             if (next_frame_min_timestamp < ctx->next_frame_timestamp) {
@@ -120,6 +133,13 @@ static void *worker_thread_proc(void *arg)
             switch (ctx->status) {
             case SESSION_STATUS_CLOSING: {
                 printf("Closing...\n");
+                char buffer[4 * 1024] = {0};
+                char *cursor = buffer;
+
+                cursor += renderer_clear(cursor, sizeof(buffer) + (buffer - cursor));
+                size_t written = cursor - buffer;
+                ssh_channel_write(ctx->channel, buffer, written);
+
                 ssh_channel_send_eof(ctx->channel);
                 ssh_channel_request_send_exit_status(ctx->channel, 0);
                 ssh_channel_close(ctx->channel);
@@ -173,27 +193,25 @@ static void *worker_thread_proc(void *arg)
 
                     if (ctx->channel != NULL) {
                         char buffer[4 * 1024] = {0};
+                        char *cursor = buffer;
 
-                        if (!ctx->clean) {
-                            size_t written = renderer_clear(buffer, sizeof(buffer));
-                            ssh_channel_write(ctx->channel, buffer, written);
-                            ctx->clean = true;
-                            printf("Sending %zu bytes: ", written);
-                            for (uint32_t i = 0; i < written; i++) {
-                                printf("%02X", ((unsigned char *)buffer)[i]);
-                            }
-                            printf("\n");
-                        }
+                        cursor += renderer_clear(cursor, sizeof(buffer) + (buffer - cursor));
 
+                        grid_clear(&ctx->grid);
 
-                        grid_rect(&ctx->grid, x + 1, y + 1);
-                        size_t written = grid_render(&ctx->grid, buffer, sizeof(buffer));
+                        const char input[] = "Hello World!";
+                        size_t input_len = sizeof(input) - 1;
 
-                        printf("Sending %zu bytes: ", written);
-                        for (uint32_t i = 0; i < written; i++) {
-                            printf("%02X", ((unsigned char *)buffer)[i]);
-                        }
-                        printf("\n");
+                        grid_box(&ctx->grid, 0, 0, 1, 1);
+                        grid_box(&ctx->grid, x, y, input_len + 1, 2);
+                        grid_string(&ctx->grid, input, x + 1, y + 1);
+
+                        cursor += grid_render(&ctx->grid, cursor, sizeof(buffer) + (buffer - cursor));
+
+                        size_t written = cursor - buffer;
+                        printf("Sending %zu bytes: \"", written);
+                        print_ansii(buffer, written);
+                        printf("\"\n");
 
                         ssh_channel_write(ctx->channel, buffer, written);
                     }

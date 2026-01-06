@@ -4,8 +4,12 @@
 #include <assert.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+
+#include "unicode.h"
+#include "unistd.h"
 
 #define ANSI_COLOR_X(X) \
     X(BLACK, 0) \
@@ -24,52 +28,23 @@ typedef enum ansi_color {
     ANSI_COLOR_X(ANSI_COLOR_ENUM)
 } ansi_color;
 
-#define ANSI_FG(color) (30 + color)
-#define ANSI_BG(color) (40 + color)
+typedef uint16_t ansi_color_escape;
 
-#define ANSI_COLOR_TABLE(name, value) \
-    [ANSI_FG(ANSI_COLOR_##name)] = {'3', value + '0'}, \
-    [ANSI_BG(ANSI_COLOR_##name)] = {'4', value + '0'},
-
-static const char color_table[][2] = {
-    ANSI_COLOR_X(ANSI_COLOR_TABLE)
-};
+#define ANSI_FG(color) ((ansi_color_escape)('3' | (((color) + '0') << 8)))
+#define ANSI_BG(color) ((ansi_color_escape)('4' | (((color) + '0') << 8)))
 
 typedef struct cell {
     ansi_color fg;
     ansi_color bg;
-    char ch;
+    utf8_char ch;
 } cell;
 
 #define GRID_HEIGHT (10 * 1)
 #define GRID_WIDTH (20 * 2)
 
 typedef struct grid {
-    char front_idx;
-    cell cells[2][GRID_HEIGHT][GRID_WIDTH];
-    ansi_color fg;
-    ansi_color bg;
+    cell cells[GRID_HEIGHT][GRID_WIDTH];
 } grid;
-
-grid grid_new(void)
-{
-    grid grid;
-    grid.front_idx = 0;
-
-    for (int buffer = 0; buffer < 2; buffer++) {
-        for (int y = 0; y < GRID_HEIGHT; y++) {
-            for (int x = 0; x < GRID_WIDTH; x++) {
-                grid.cells[buffer][y][x] = (cell){
-                    .ch = ' ',
-                    .fg = ANSI_COLOR_DEFAULT,
-                    .bg = ANSI_COLOR_DEFAULT,
-                };
-            }
-        }
-    }
-
-    return grid;
-}
 
 typedef struct cursor {
     int x;
@@ -82,14 +57,25 @@ typedef struct buf_writer {
     size_t cursor;
 } buf_writer;
 
-void buf_writer_write(buf_writer *writer, const char *data, size_t size)
+static void buf_writer_write_unchecked(buf_writer *writer, const char *data, size_t size)
 {
-    assert(writer->cursor + size <= writer->capacity);
     memcpy(&writer->content[writer->cursor], data, size);
     writer->cursor += size;
 }
 
-void buf_writer_int(buf_writer *writer, int value)
+static void buf_writer_write(buf_writer *writer, const char *data, size_t size)
+{
+    assert(writer->capacity - writer->cursor >= size);
+    buf_writer_write_unchecked(writer, data, size);
+}
+
+static void buf_writer_utf8(buf_writer *writer, utf8_char ch)
+{
+    const size_t remaining_capacity = writer->capacity - writer->cursor;
+    writer->cursor += utf8_char_write(ch, &writer->content[writer->cursor], remaining_capacity);
+}
+
+static void buf_writer_int(buf_writer *writer, int value)
 {
     char buffer[16];
     char *cursor = buffer + sizeof(buffer) - 1;
@@ -110,7 +96,7 @@ void buf_writer_int(buf_writer *writer, int value)
     buf_writer_write(writer, cursor + 1, sizeof(buffer) - (cursor - buffer) - 1);
 }
 
-void buf_writer_cursor_to(buf_writer *writer, int x, int y)
+static void buf_writer_cursor_to(buf_writer *writer, int x, int y)
 {
     buf_writer_write(writer, "\x1b[", 2);
     buf_writer_int(writer, y);
@@ -119,25 +105,42 @@ void buf_writer_cursor_to(buf_writer *writer, int x, int y)
     buf_writer_write(writer, "H", 1);
 }
 
-void buf_writer_color1(buf_writer *writer, ansi_color color)
+static void buf_writer_color1(buf_writer *writer, ansi_color_escape color)
 {
-    buf_writer_write(writer, "\x1b[", 2);
-    buf_writer_write(writer, color_table[color], sizeof(color_table[color]));
-    buf_writer_write(writer, "m", 1);
+    assert(writer->capacity - writer->cursor >= 5);
+    char *p = &writer->content[writer->cursor];
+
+    p[0] = '\x1b';
+    p[1] = '[';
+    p[2] = color & 0xff;
+    p[3] = (color >> 8) & 0xff;
+    p[4] = 'm';
+
+    writer->cursor += 5;
 }
 
-void buf_writer_color2(buf_writer *writer, ansi_color color1, ansi_color color2)
+static void buf_writer_color2(buf_writer *writer, ansi_color_escape color1, ansi_color_escape color2)
 {
-    buf_writer_write(writer, "\x1b[", 2);
-    buf_writer_write(writer, color_table[color1], sizeof(color_table[color1]));
-    buf_writer_write(writer, ";", 1);
-    buf_writer_write(writer, color_table[color2], sizeof(color_table[color2]));
-    buf_writer_write(writer, "m", 1);
+    assert(writer->capacity - writer->cursor >= 8);
+    char *p = &writer->content[writer->cursor];
+
+    p[0] = '\x1b';
+    p[1] = '[';
+    p[2] = color1 & 0xff;
+    p[3] = (color1 >> 8) & 0xff;
+    p[4] = ';';
+    p[5] = color2 & 0xff;
+    p[6] = (color2 >> 8) & 0xff;
+    p[7] = 'm';
+
+    writer->cursor += 8;
 }
 
 #define ANSI_ERASE_ENTITY_SCREEN "\x1b[2J"
 #define ANSI_CURSOR_HOME_POSITION "\x1b[H"
 #define ANSI_HIDE_CURSOR "\x1b[?25l"
+#define ANSI_HIDE_CURSOR "\x1b[?25l"
+#define ANSI_RESET_COLOR "\x1b[0m"
 
 static int x = 0;
 static int y = 0;
@@ -145,38 +148,61 @@ static int y = 0;
 size_t renderer_clear(char *buffer, size_t buffer_size)
 {
     buf_writer writer = { .content = buffer, .capacity = buffer_size, .cursor = 0 };
-    buf_writer_write(&writer, ANSI_ERASE_ENTITY_SCREEN, sizeof(ANSI_ERASE_ENTITY_SCREEN) - 1);
-    buf_writer_write(&writer, ANSI_CURSOR_HOME_POSITION, sizeof(ANSI_CURSOR_HOME_POSITION) - 1);
-    buf_writer_write(&writer, ANSI_HIDE_CURSOR, sizeof(ANSI_HIDE_CURSOR) - 1);
+    const char clear_all[] = ANSI_RESET_COLOR ANSI_ERASE_ENTITY_SCREEN ANSI_CURSOR_HOME_POSITION ANSI_HIDE_CURSOR;
+    buf_writer_write(&writer, clear_all, sizeof(clear_all) - 1);
 
     return writer.cursor;
 }
 
+void grid_clear(grid *grid) {
+    memset(grid, 0 , sizeof(*grid));
+}
+
 void grid_rect(grid *grid, int x, int y)
 {
-    size_t front_idx = grid->front_idx;
-    grid->cells[front_idx][y][x] = (cell) { .bg = ANSI_COLOR_RED, .ch = ' '};
-    grid->cells[front_idx][y][x + 1] = (cell) { .bg = ANSI_COLOR_BLUE, .ch = ' '};
+    grid->cells[y][x] = (cell) { .bg = ANSI_COLOR_RED, .fg = ANSI_COLOR_BLACK, .ch.bytes = {'.'} };
+    grid->cells[y][x + 1] = (cell) { .bg = ANSI_COLOR_RED, .fg = ANSI_COLOR_BLACK, .ch.bytes = {'.'} };
+}
+
+void grid_string(grid *grid, const char *str, int x, int y)
+{
+    // TODO: Handle utf-8
+    for (int i = 0; str[i] != '\0'; i++) {
+        char c = str[i];
+        grid->cells[y][x + i] = (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch.bytes = {c} };
+    }
+}
+
+void grid_box(grid *grid, int x, int y, int width, int height)
+{
+    grid->cells[y][x]                  = (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_DOWN_RIGHT };
+    grid->cells[y][x + width]          = (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_DOWN_LEFT };
+    grid->cells[y + height][x]         = (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_UP_RIGHT };
+    grid->cells[y + height][x + width] = (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_UP_LEFT };
+
+    for (int i = 1; i < width; i++) {
+        grid->cells[y][x + i] = (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_HORIZONTAL };
+        grid->cells[y + height][x + i] = (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_HORIZONTAL };
+    }
+
+    for (int i = 1; i < height; i++) {
+        grid->cells[y + i][x] = (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_VERTICAL };
+        grid->cells[y + i][x + width] = (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_VERTICAL };
+    }
 }
 
 size_t grid_render(grid *grid, char *buffer, size_t buffer_size)
 {
-    const size_t front_idx = grid->front_idx;
-    const size_t back_idx = front_idx == 0 ? 1 : 0;
-
     int cursor_x = 0;
     int cursor_y = 0;
+    ansi_color fg = ANSI_COLOR_DEFAULT;
+    ansi_color bg = ANSI_COLOR_DEFAULT;
     buf_writer writer = { .content = buffer, .capacity = buffer_size, .cursor = 0 };
 
     for (int y = 0; y < GRID_HEIGHT; y++) {
         for (int x = 0; x < GRID_WIDTH; x++) {
-            cell front_cell = grid->cells[front_idx][y][x];
-            cell back_cell = grid->cells[back_idx][y][x];
-
-            bool bg_equal = front_cell.bg == back_cell.bg;
-            bool fg_equal = front_cell.fg == back_cell.fg;
-
-            if (front_cell.ch == back_cell.ch && bg_equal && fg_equal) {
+            cell cell = grid->cells[y][x];
+            if (cell.ch.bytes[0] == '\0') {
                 continue;
             }
 
@@ -184,23 +210,22 @@ size_t grid_render(grid *grid, char *buffer, size_t buffer_size)
                 buf_writer_cursor_to(&writer, x + 1, y + 1);
             }
 
-            if (grid->fg != front_cell.fg && grid->bg != front_cell.bg) {
-                buf_writer_color2(&writer, ANSI_FG(front_cell.fg), ANSI_BG(front_cell.bg));
-                grid->fg = front_cell.fg;
-                grid->bg = front_cell.bg;
-            } else if (grid->bg != front_cell.bg) {
-                buf_writer_color1(&writer, ANSI_BG(front_cell.bg));
-                grid->bg = front_cell.bg;
-            } else if (grid->fg != front_cell.fg) {
-                buf_writer_color1(&writer, ANSI_FG(front_cell.fg));
-                grid->fg = front_cell.fg;
+            if (fg != cell.fg && bg != cell.bg) {
+                buf_writer_color2(&writer, ANSI_FG(cell.fg), ANSI_BG(cell.bg));
+                fg = cell.fg;
+                bg = cell.bg;
+            } else if (bg != cell.bg) {
+                buf_writer_color1(&writer, ANSI_BG(cell.bg));
+                bg = cell.bg;
+            } else if (fg != cell.fg) {
+                buf_writer_color1(&writer, ANSI_FG(cell.fg));
+                fg = cell.fg;
             }
-            buf_writer_write(&writer, &front_cell.ch, 1);
-            cursor_x++;
+            buf_writer_utf8(&writer, cell.ch);
+            cursor_x = x + 1;
+            cursor_y = y;
         }
     }
-
-    grid->front_idx = back_idx;
 
     return writer.cursor;
 }
