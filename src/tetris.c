@@ -1,11 +1,15 @@
+#define _POSIX_C_SOURCE 199309L
+
 #include <assert.h>
 #include <limits.h>
 #include <errno.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
+#include <time.h>
 #include <libssh/callbacks.h>
 #include <libssh/libssh.h>
 #include <libssh/server.h>
@@ -16,9 +20,18 @@
 #include "input.h"
 #include "session_manager.h"
 #include "spsc_queue.h"
+#include "renderer.h"
 
-#define WORKER_THREADS_COUNT 1
+#define WORKER_THREADS_COUNT 8
 #define WORKER_THREAD_SESSION_COUNT_MAX 1024
+
+static uint64_t get_nanos(void)
+{
+    struct timespec time;
+    assert(clock_gettime(CLOCK_MONOTONIC, &time) == 0);
+
+    return time.tv_sec * 1e9 + time.tv_nsec;
+}
 
 typedef struct worker_thread {
     pthread_t thread;
@@ -34,8 +47,10 @@ static worker_thread worker_threads[WORKER_THREADS_COUNT] = {0};
 static void *worker_thread_proc(void *arg)
 {
     worker_thread *thread = (worker_thread *)arg;
-
+    uint64_t next_frame_min_timestamp = 0;
     for(;;) {
+        uint64_t timestamp = get_nanos();
+
         ssh_session new_session;
         while (spsc_queue_shift(&thread->incoming_sessions, (void **)&new_session)) {
             session_ctx *ctx = session_manager_add(&thread->session_manager, new_session);
@@ -48,7 +63,7 @@ static void *worker_thread_proc(void *arg)
 
             printf("Accepted connection on thread %zu and slot %zu\n", thread->id, ctx->session_idx);
 
-            // TODO: Does this block for the session?
+            // TODO: Does this block for too long?
             if (ssh_handle_key_exchange(ctx->session) != SSH_OK) {
                 fprintf(stderr, "%s\n", ssh_get_error(ctx->session));
                 ssh_free(ctx->session);
@@ -62,24 +77,57 @@ static void *worker_thread_proc(void *arg)
                 session_manager_remove(&thread->session_manager, ctx->session_idx);
                 continue;
             };
+
+            ctx->next_frame_timestamp = timestamp;
         }
 
-        // TODO: We should not syncronize all players in the same event loop
-        ssh_event_dopoll(thread->event, 0);
+        uint64_t poll_timeout;
+        if (timestamp > next_frame_min_timestamp) {
+            poll_timeout = 0;
+        } else {
+            // Take half of that it would take for the next frame as milliseconds
+            poll_timeout = (next_frame_min_timestamp - timestamp) / (2 * 1000);
+            // Clamp the value to INT_MAX to prevent overflow
+            poll_timeout = poll_timeout > INT_MAX ? INT_MAX : poll_timeout;
+            // If the next frame will happen in the next 16 milliseconds, wait for a single millisecond.
+            // I'm not sure if with a large number of players this can be problematically...
+            poll_timeout = poll_timeout <= 16 ? 1 : poll_timeout;
+        }
 
+        if(ssh_event_dopoll(thread->event, (int)poll_timeout) == SSH_ERROR) {
+            // If dopoll fails it means no session is attached to the event loop, we should just
+            // wait for a frame and try later and try again later
+            struct timespec sleep_duration = {
+                .tv_nsec = 16 * 1000,
+                .tv_sec = 0,
+            };
+            nanosleep(&sleep_duration, NULL);
+        }
+
+        timestamp = get_nanos();
+        // 60 FPS
+        uint64_t next_timestamp = timestamp + 16 * 1000;
         for (size_t idx = 0; idx < thread->session_manager.sessions_count; idx++) {
             session_ctx *ctx = &thread->session_manager.sessions[idx];
+            if (next_frame_min_timestamp < ctx->next_frame_timestamp) {
+                next_frame_min_timestamp = ctx->next_frame_timestamp;
+            }
 
-            if (ctx->status == SESSION_STATUS_CLOSING) {
+            if (ctx->next_frame_timestamp >= timestamp) {
+                continue;
+            }
+
+            switch (ctx->status) {
+            case SESSION_STATUS_CLOSING: {
                 printf("Closing...\n");
                 ssh_channel_send_eof(ctx->channel);
                 ssh_channel_request_send_exit_status(ctx->channel, 0);
                 ssh_channel_close(ctx->channel);
                 ssh_channel_free(ctx->channel);
                 ctx->status = SESSION_STATUS_DEAD;
-            }
-
-            if (ctx->status == SESSION_STATUS_DEAD) {
+                ctx->next_frame_timestamp = next_timestamp;
+            } break;
+            case SESSION_STATUS_DEAD: {
                 printf("Killing %d...\n", ssh_get_status(ctx->session));
                 // TODO: We should have a timeout to forcelly close the connection.
                 if ((ssh_get_status(ctx->session) & (SSH_CLOSED | SSH_CLOSED_ERROR)) != 0) {
@@ -89,9 +137,8 @@ static void *worker_thread_proc(void *arg)
                     ssh_free(ctx->session);
                     session_manager_remove(&thread->session_manager, idx);
                 }
-            }
-
-            if (ctx->status == SESSION_STATUS_ALIVE) {
+            } break;
+            case SESSION_STATUS_ALIVE: {
                 while (!ring_buf_is_empty(&ctx->key_reader.buf)) {
                     key_press_result result = key_press_read(&ctx->key_reader);
 
@@ -123,9 +170,39 @@ static void *worker_thread_proc(void *arg)
                     } else if (press.kind == KEY_KIND_CTRL && press.ch == 'C') {
                         ctx->status = SESSION_STATUS_CLOSING;
                     }
+
+                    if (ctx->channel != NULL) {
+                        char buffer[4 * 1024] = {0};
+
+                        if (!ctx->clean) {
+                            size_t written = renderer_clear(buffer, sizeof(buffer));
+                            ssh_channel_write(ctx->channel, buffer, written);
+                            ctx->clean = true;
+                            printf("Sending %zu bytes: ", written);
+                            for (uint32_t i = 0; i < written; i++) {
+                                printf("%02X", ((unsigned char *)buffer)[i]);
+                            }
+                            printf("\n");
+                        }
+
+
+                        grid_rect(&ctx->grid, x + 1, y + 1);
+                        size_t written = grid_render(&ctx->grid, buffer, sizeof(buffer));
+
+                        printf("Sending %zu bytes: ", written);
+                        for (uint32_t i = 0; i < written; i++) {
+                            printf("%02X", ((unsigned char *)buffer)[i]);
+                        }
+                        printf("\n");
+
+                        ssh_channel_write(ctx->channel, buffer, written);
+                    }
                 }
 
-                // render(ctx->channel, x, y);
+                ctx->next_frame_timestamp = next_timestamp;
+            } break;
+            default:
+                break;
             }
         }
     }

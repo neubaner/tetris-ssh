@@ -1,10 +1,12 @@
 #ifndef TETRIS_SSH_SESSION_H
 #define TETRIS_SSH_SESSION_H
 
+#include <stdint.h>
 #include <stdio.h>
 #include <libssh/libssh.h>
 #include <libssh/callbacks.h>
 #include "input.h"
+#include "renderer.h"
 
 typedef struct pty_win_size {
     int width;
@@ -35,55 +37,23 @@ typedef struct session_ctx {
     key_press_reader key_reader;
     struct pty_data pty;
     session_status status;
+    uint64_t next_frame_timestamp;
+    grid grid;
+    bool clean;
 } session_ctx;
 
 #define ANSI_ERASE_ENTITY_SCREEN "\x1b[2J"
 #define ANSI_CURSOR_HOME_POSITION "\x1b[H"
 #define ANSI_HIDE_CURSOR "\x1b[?25l"
 
-static int x = 0;
-static int y = 0;
-
 void session_ctx_setup_server_callbacks(session_ctx *ctx);
 void session_ctx_setup_channel_callbacks(session_ctx *ctx);
-
-void render(ssh_channel channel, int x, int y)
-{
-    char buffer[1024] = {0};
-    char *cursor = buffer;
-
-    memcpy(cursor, ANSI_ERASE_ENTITY_SCREEN, sizeof(ANSI_ERASE_ENTITY_SCREEN) - 1); cursor += sizeof(ANSI_ERASE_ENTITY_SCREEN) - 1;
-    memcpy(cursor, ANSI_CURSOR_HOME_POSITION, sizeof(ANSI_CURSOR_HOME_POSITION) - 1); cursor += sizeof(ANSI_CURSOR_HOME_POSITION) - 1;
-    memcpy(cursor, ANSI_HIDE_CURSOR, sizeof(ANSI_HIDE_CURSOR) - 1); cursor += sizeof(ANSI_HIDE_CURSOR) - 1;
-
-    for (int i = 0; i < x; i++) {
-        // Arrow right
-        memcpy(cursor, "\x1b[C", 3);
-        cursor += 3;
-    }
-
-    for (int i = 0; i < y; i++) {
-        // Arrow down
-        memcpy(cursor, "\x1b[B", 3);
-        cursor += 3;
-    }
-
-    const char hello_world[] = "\x1b[1;4;31;44mHello world!\x1b[0mReset?\r\n";
-    memcpy(cursor, hello_world, sizeof(hello_world) - 1);
-    cursor += sizeof(hello_world) - 1;
-
-    ssh_channel_write(channel, buffer, (uint32_t)(cursor - buffer));
-}
 
 int shell_request(ssh_session session, ssh_channel channel, void *userdata)
 {
     (void)session;
     (void)channel;
     (void)userdata;
-
-    // session_ctx *ctx = (session_ctx *)userdata;
-
-    // render(channel, x, y);
 
     return SSH_OK;
 }
@@ -132,8 +102,6 @@ int data_function(ssh_session session, ssh_channel channel, void *data, uint32_t
         ring_buf_push(&ctx->key_reader.buf, chars[read]);
     }
 
-    // render(channel, x, y);
-
     return read;
 }
 
@@ -153,7 +121,6 @@ int pty_window_change(ssh_session session,
     ctx->pty.win_size.px_height = pwheight;
 
     printf("resize: width=%d height=%d, pxwidth=%d, pxheight=%d\n", width, height, pxwidth, pwheight);
-    // render(channel, x, y);
 
     return SSH_OK;
 }
