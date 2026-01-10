@@ -10,6 +10,11 @@ typedef struct utf8_char {
     unsigned char bytes[4];
 } utf8_char;
 
+#define UTF8_1(cp) { (cp), 0, 0, 0 }
+#define UTF8_2(cp) { 0xC0 | ((cp) >> 6), 0x80 | ((cp) & 0x3F), 0, 0 }
+#define UTF8_3(cp) { 0xE0 | ((cp) >> 12), 0x80 | (((cp) >> 6) & 0x3F), ((cp) & 0x3F), 0 }
+#define UTF8_4(cp) { 0xF0 | ((cp) >> 18), 0x80 | (((cp) >> 12) & 0x3F), 0x80 | (((cp) >> 6) & 0x3F), ((cp) & 0x3F) }
+
 const utf8_char BOX_LIGHT_DOWN_RIGHT = { .bytes = { 0xe2, 0x94, 0x8c } };
 const utf8_char BOX_LIGHT_DOWN_LEFT = { .bytes = { 0xe2, 0x94, 0x90 } };
 const utf8_char BOX_LIGHT_UP_RIGHT = { .bytes = { 0xe2, 0x94, 0x94 } };
