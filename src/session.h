@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <libssh/libssh.h>
 #include <libssh/callbacks.h>
+#include "game.h"
 #include "input.h"
 #include "renderer.h"
 
@@ -37,9 +38,9 @@ typedef struct session_ctx {
     key_press_reader key_reader;
     struct pty_data pty;
     session_status status;
-    uint64_t next_frame_timestamp;
+    uint64_t last_frame_ns;
     grid grid;
-    bool clean;
+    game_state game_state;
 } session_ctx;
 
 #define ANSI_ERASE_ENTITY_SCREEN "\x1b[2J"

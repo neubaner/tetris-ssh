@@ -21,8 +21,12 @@
 #include "session_manager.h"
 #include "spsc_queue.h"
 #include "renderer.h"
+#include "game.h"
 
-#define GAME_DT_MS (1000 / 30)
+// static int x = 0;
+static int y = 0;
+
+#define GAME_FRAMERATE_MS (1000 / 60)
 #define WORKER_THREADS_COUNT 8
 #define WORKER_THREAD_SESSION_COUNT_MAX 1024
 
@@ -52,7 +56,7 @@ void print_ansii(const char *buffer, size_t size) {
         if (isprint(c)) {
             printf("%c", c);
         } else {
-            printf("\\x%02x", c);
+            printf("\\x%02x", (unsigned char)c);
         }
     }
 }
@@ -60,10 +64,7 @@ void print_ansii(const char *buffer, size_t size) {
 static void *worker_thread_proc(void *arg)
 {
     worker_thread *thread = (worker_thread *)arg;
-    uint64_t next_frame_min_timestamp = 0;
     for(;;) {
-        uint64_t timestamp = get_nanos();
-
         ssh_session new_session;
         while (spsc_queue_shift(&thread->incoming_sessions, (void **)&new_session)) {
             session_ctx *ctx = session_manager_add(&thread->session_manager, new_session);
@@ -91,10 +92,11 @@ static void *worker_thread_proc(void *arg)
                 continue;
             };
 
-            ctx->next_frame_timestamp = timestamp;
+            ctx->last_frame_ns = get_nanos();
         }
 
         uint64_t poll_timeout;
+#if 0
         if (timestamp > next_frame_min_timestamp) {
             poll_timeout = 0;
         } else {
@@ -106,29 +108,30 @@ static void *worker_thread_proc(void *arg)
             // I'm not sure if with a large number of players this can be problematically...
             poll_timeout = poll_timeout <= GAME_DT_MS ? 1 : poll_timeout;
         }
+#else
+        poll_timeout = 0;
+#endif
 
         if(ssh_event_dopoll(thread->event, (int)poll_timeout) == SSH_ERROR) {
             // If dopoll fails it means no session is attached to the event loop, we should just
             // wait for a frame and try later and try again later
             struct timespec sleep_duration = {
-                .tv_nsec = GAME_DT_MS * 1000,
+                .tv_nsec = GAME_FRAMERATE_MS * 1000,
                 .tv_sec = 0,
             };
             nanosleep(&sleep_duration, NULL);
         }
 
-        timestamp = get_nanos();
-        // 60 FPS
-        uint64_t next_timestamp = timestamp + GAME_DT_MS * 1000;
+        uint64_t current_ns = get_nanos();
         for (size_t idx = 0; idx < thread->session_manager.sessions_count; idx++) {
             session_ctx *ctx = &thread->session_manager.sessions[idx];
-            if (next_frame_min_timestamp < ctx->next_frame_timestamp) {
-                next_frame_min_timestamp = ctx->next_frame_timestamp;
-            }
+            uint64_t next_frame_ns = ctx->last_frame_ns + (GAME_FRAMERATE_MS * 1000 * 1000);
 
-            if (ctx->next_frame_timestamp >= timestamp) {
+            if (next_frame_ns > current_ns) {
                 continue;
             }
+
+            uint64_t dt_ns = current_ns - ctx->last_frame_ns;
 
             switch (ctx->status) {
             case SESSION_STATUS_CLOSING: {
@@ -145,7 +148,6 @@ static void *worker_thread_proc(void *arg)
                 ssh_channel_close(ctx->channel);
                 ssh_channel_free(ctx->channel);
                 ctx->status = SESSION_STATUS_DEAD;
-                ctx->next_frame_timestamp = next_timestamp;
             } break;
             case SESSION_STATUS_DEAD: {
                 printf("Killing %d...\n", ssh_get_status(ctx->session));
@@ -159,6 +161,7 @@ static void *worker_thread_proc(void *arg)
                 }
             } break;
             case SESSION_STATUS_ALIVE: {
+                int dx = 0;
                 while (!ring_buf_is_empty(&ctx->key_reader.buf)) {
                     key_press_result result = key_press_read(&ctx->key_reader);
 
@@ -184,44 +187,56 @@ static void *worker_thread_proc(void *arg)
                     } else if ((press.kind == KEY_KIND_CHAR && tolower(press.ch) == 'k') || press.kind == KEY_KIND_ARROW_UP) {
                         y -= 1 * speed;
                     } else if ((press.kind == KEY_KIND_CHAR && tolower(press.ch) == 'h') || press.kind == KEY_KIND_ARROW_LEFT) {
-                        x -= 1 * speed;
+                        dx -= 1 * speed;
                     } else if ((press.kind == KEY_KIND_CHAR && tolower(press.ch) == 'l') || press.kind == KEY_KIND_ARROW_RIGHT) {
-                        x += 1 * speed;
+                        dx += 1 * speed;
                     } else if (press.kind == KEY_KIND_CTRL && press.ch == 'C') {
                         ctx->status = SESSION_STATUS_CLOSING;
                     }
-
-                    if (ctx->channel != NULL) {
-                        char buffer[4 * 1024] = {0};
-                        char *cursor = buffer;
-
-                        cursor += renderer_clear(cursor, sizeof(buffer) + (buffer - cursor));
-
-                        grid_clear(&ctx->grid);
-
-                        const char input[] = "Hello World!";
-                        size_t input_len = sizeof(input) - 1;
-
-                        grid_box(&ctx->grid, 0, 0, 1, 1);
-                        grid_box(&ctx->grid, x, y, input_len + 1, 2);
-                        grid_string(&ctx->grid, input, x + 1, y + 1);
-
-                        cursor += grid_render(&ctx->grid, cursor, sizeof(buffer) + (buffer - cursor));
-
-                        size_t written = cursor - buffer;
-                        printf("Sending %zu bytes: \"", written);
-                        print_ansii(buffer, written);
-                        printf("\"\n");
-
-                        ssh_channel_write(ctx->channel, buffer, written);
-                    }
                 }
 
-                ctx->next_frame_timestamp = next_timestamp;
+                if (ctx->channel != NULL) {
+                    char buffer[4 * 1024] = {0};
+                    char *cursor = buffer;
+
+                    cursor += renderer_clear(cursor, sizeof(buffer) + (buffer - cursor));
+
+                    grid_clear(&ctx->grid);
+
+                    // const char input[] = "Hello World!";
+                    // size_t input_len = sizeof(input) - 1;
+
+                    // grid_box(&ctx->grid, 0, 0, 1, 1);
+                    // grid_box(&ctx->grid, x, y, input_len + 1, 2);
+                    // grid_string(&ctx->grid, input, x + 1, y + 1);
+                    // tetrimino_render(&ctx->grid, x + 1, y + 1, TETRIMINO_TYPE_T);
+
+                    // for (tetrimino_type type = 0; type < TETRIMINO_TYPE_COUNT; type++) {
+                    //     int xx = ((type % 3) * 9) + 4;
+                    //     int yy = ((type / 3) * 4) + 4;
+                    //     tetrimino_render(&ctx->grid, x + xx, y + yy, type);
+                    // }
+
+                    ctx->game_state.x += dx;
+                    game_update(&ctx->game_state, dt_ns);
+                    game_render(&ctx->game_state, &ctx->grid);
+                    cursor += grid_render(&ctx->grid, cursor, sizeof(buffer) + (buffer - cursor));
+
+                    size_t written = cursor - buffer;
+                    printf("Sending %zu bytes: \"", written);
+                    print_ansii(buffer, written);
+                    printf("\"\n");
+
+                    ssh_channel_write(ctx->channel, buffer, written);
+                }
+
             } break;
             default:
                 break;
             }
+
+            current_ns = get_nanos();
+            ctx->last_frame_ns = current_ns;
         }
     }
 

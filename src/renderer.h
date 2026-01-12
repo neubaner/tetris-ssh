@@ -9,7 +9,6 @@
 #include <string.h>
 
 #include "unicode.h"
-#include "unistd.h"
 
 #define ANSI_COLOR_X(X) \
     X(BLACK, 0) \
@@ -22,16 +21,16 @@
     X(WHITE, 7) \
     X(DEFAULT, 9)
 
-#define ANSI_COLOR_ENUM(name, value) ANSI_COLOR_##name = value,
+#define ANSI_COLOR_ENUM(name, value) ANSI_COLOR_##name = value, ANSI_COLOR_BRIGHT_##name = value + 60,
 
 typedef enum ansi_color {
     ANSI_COLOR_X(ANSI_COLOR_ENUM)
 } ansi_color;
 
-typedef uint16_t ansi_color_escape;
+typedef uint8_t ansi_color_escape;
 
-#define ANSI_FG(color) ((ansi_color_escape)('3' | (((color) + '0') << 8)))
-#define ANSI_BG(color) ((ansi_color_escape)('4' | (((color) + '0') << 8)))
+#define ANSI_FG(color) ((color) + 30)
+#define ANSI_BG(color) ((color) + 40)
 
 typedef struct cell {
     ansi_color fg;
@@ -39,7 +38,7 @@ typedef struct cell {
     utf8_char ch;
 } cell;
 
-#define GRID_HEIGHT (10 * 1)
+#define GRID_HEIGHT (30 * 1)
 #define GRID_WIDTH (20 * 2)
 
 typedef struct grid {
@@ -107,33 +106,18 @@ static void buf_writer_cursor_to(buf_writer *writer, int x, int y)
 
 static void buf_writer_color1(buf_writer *writer, ansi_color_escape color)
 {
-    assert(writer->capacity - writer->cursor >= 5);
-    char *p = &writer->content[writer->cursor];
-
-    p[0] = '\x1b';
-    p[1] = '[';
-    p[2] = color & 0xff;
-    p[3] = (color >> 8) & 0xff;
-    p[4] = 'm';
-
-    writer->cursor += 5;
+    buf_writer_write(writer, "\x1b[", 2);
+    buf_writer_int(writer, color);
+    buf_writer_write(writer, "m", 1);
 }
 
 static void buf_writer_color2(buf_writer *writer, ansi_color_escape color1, ansi_color_escape color2)
 {
-    assert(writer->capacity - writer->cursor >= 8);
-    char *p = &writer->content[writer->cursor];
-
-    p[0] = '\x1b';
-    p[1] = '[';
-    p[2] = color1 & 0xff;
-    p[3] = (color1 >> 8) & 0xff;
-    p[4] = ';';
-    p[5] = color2 & 0xff;
-    p[6] = (color2 >> 8) & 0xff;
-    p[7] = 'm';
-
-    writer->cursor += 8;
+    buf_writer_write(writer, "\x1b[", 2);
+    buf_writer_int(writer, color1);
+    buf_writer_write(writer, ";", 1);
+    buf_writer_int(writer, color2);
+    buf_writer_write(writer, "m", 1);
 }
 
 #define ANSI_ERASE_ENTITY_SCREEN "\x1b[2J"
@@ -141,9 +125,6 @@ static void buf_writer_color2(buf_writer *writer, ansi_color_escape color1, ansi
 #define ANSI_HIDE_CURSOR "\x1b[?25l"
 #define ANSI_HIDE_CURSOR "\x1b[?25l"
 #define ANSI_RESET_COLOR "\x1b[0m"
-
-static int x = 0;
-static int y = 0;
 
 size_t renderer_clear(char *buffer, size_t buffer_size)
 {
@@ -158,10 +139,10 @@ void grid_clear(grid *grid) {
     memset(grid, 0 , sizeof(*grid));
 }
 
-void grid_rect(grid *grid, int x, int y)
+void grid_square(grid *grid, int x, int y, ansi_color color)
 {
-    grid->cells[y][x] = (cell) { .bg = ANSI_COLOR_RED, .fg = ANSI_COLOR_BLACK, .ch.bytes = {'.'} };
-    grid->cells[y][x + 1] = (cell) { .bg = ANSI_COLOR_RED, .fg = ANSI_COLOR_BLACK, .ch.bytes = {'.'} };
+    grid->cells[y][x] = (cell) { .bg = color, .fg = ANSI_COLOR_DEFAULT, .ch.bytes = {' '} };
+    grid->cells[y][x + 1] = (cell) { .bg = color, .fg = ANSI_COLOR_DEFAULT, .ch.bytes = {' '} };
 }
 
 void grid_string(grid *grid, const char *str, int x, int y)

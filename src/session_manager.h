@@ -2,6 +2,7 @@
 #define TETRIS_SSH_SESSION_MANAGER_H
 
 #include <stddef.h>
+#include "game.h"
 #include "session.h"
 
 #define SESSION_MANAGER_SESSION_COUNT_MAX 1024
@@ -26,6 +27,7 @@ session_ctx *session_manager_add(session_manager *manager, ssh_session session)
         .status = SESSION_STATUS_ALIVE,
     };
     session_ctx_setup_server_callbacks(ctx);
+    game_init(&ctx->game_state);
 
     manager->sessions_count++;
     return ctx;
