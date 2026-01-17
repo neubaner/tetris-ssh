@@ -25,16 +25,17 @@ int main(void)
 
     // NOTE: ctrl+M is \r and it's not recognized as a ctrl char
     const char letters[] = "ABCDEFGHIJKLNOPQRSTUVWXYZ";
-    for (const char *c = letters; *c != '\0'; c++) {
-        test_case("ctrl char '%c'", (char)*c) {
+    for (volatile int i = 0; i < (int)sizeof(letters) - 1; i++) {
+        const char c = letters[i];
+        test_case("ctrl char '%c'", c) {
             key_press_reader reader = {0};
-            const char ctrl_char = (*c & 0x1f);
+            const char ctrl_char = (c & 0x1f);
             ring_buf_push(&reader.buf, ctrl_char);
             key_press_result result = key_press_read(&reader);
 
             test_assert(!result.needs_more_input);
             test_assert_eq_enum(result.press.kind, KEY_KIND_CTRL);
-            test_assert_eq_char(result.press.ch, *c);
+            test_assert_eq_char(result.press.ch, c);
         }
     }
 
