@@ -38,8 +38,8 @@ typedef struct cell {
     utf8_char ch;
 } cell;
 
-#define GRID_HEIGHT (30 * 1)
-#define GRID_WIDTH (20 * 2)
+#define GRID_HEIGHT (60 * 1)
+#define GRID_WIDTH (60 * 2)
 
 typedef struct grid {
     cell cells[GRID_HEIGHT][GRID_WIDTH];
@@ -135,14 +135,21 @@ size_t renderer_clear(char *buffer, size_t buffer_size)
     return writer.cursor;
 }
 
+void grid_set_piece(grid *grid, int x, int y, cell cell)
+{
+    if (x >= 0 && x < GRID_WIDTH && y >= 0 && y < GRID_HEIGHT) {
+        grid->cells[y][x] = cell;
+    }
+}
+
 void grid_clear(grid *grid) {
     memset(grid, 0 , sizeof(*grid));
 }
 
 void grid_square(grid *grid, int x, int y, ansi_color color)
 {
-    grid->cells[y][x] = (cell) { .bg = color, .fg = ANSI_COLOR_DEFAULT, .ch.bytes = {' '} };
-    grid->cells[y][x + 1] = (cell) { .bg = color, .fg = ANSI_COLOR_DEFAULT, .ch.bytes = {' '} };
+    grid_set_piece(grid, x, y, (cell) { .bg = color, .fg = ANSI_COLOR_DEFAULT, .ch.bytes = {' '} });
+    grid_set_piece(grid, x + 1, y, (cell) { .bg = color, .fg = ANSI_COLOR_DEFAULT, .ch.bytes = {' '} });
 }
 
 void grid_string(grid *grid, const char *str, int x, int y)
@@ -150,25 +157,31 @@ void grid_string(grid *grid, const char *str, int x, int y)
     // TODO: Handle utf-8
     for (int i = 0; str[i] != '\0'; i++) {
         char c = str[i];
-        grid->cells[y][x + i] = (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch.bytes = {c} };
+        grid_set_piece(grid, x + i, y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch.bytes = {c} });
     }
 }
 
+// Draws a box around the @x and @y position, that can fit @width and @height characters.
 void grid_box(grid *grid, int x, int y, int width, int height)
 {
-    grid->cells[y][x]                  = (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_DOWN_RIGHT };
-    grid->cells[y][x + width]          = (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_DOWN_LEFT };
-    grid->cells[y + height][x]         = (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_UP_RIGHT };
-    grid->cells[y + height][x + width] = (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_UP_LEFT };
+    int left_x = x - 1;
+    int right_x = x + width;
+    int top_y = y - 1;
+    int bot_y = y + height;
 
-    for (int i = 1; i < width; i++) {
-        grid->cells[y][x + i] = (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_HORIZONTAL };
-        grid->cells[y + height][x + i] = (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_HORIZONTAL };
+    grid_set_piece(grid, left_x, top_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_DOWN_RIGHT });
+    grid_set_piece(grid, right_x, top_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_DOWN_LEFT });
+    grid_set_piece(grid, left_x, bot_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_UP_RIGHT });
+    grid_set_piece(grid, right_x, bot_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_UP_LEFT });
+
+    for (int xx = left_x + 1; xx < right_x; xx++) {
+        grid_set_piece(grid, xx, top_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_HORIZONTAL });
+        grid_set_piece(grid, xx, bot_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_HORIZONTAL });
     }
 
-    for (int i = 1; i < height; i++) {
-        grid->cells[y + i][x] = (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_VERTICAL };
-        grid->cells[y + i][x + width] = (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_VERTICAL };
+    for (int yy = top_y + 1; yy < bot_y; yy++) {
+        grid_set_piece(grid, left_x, yy, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_VERTICAL });
+        grid_set_piece(grid, right_x, yy, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_VERTICAL });
     }
 }
 

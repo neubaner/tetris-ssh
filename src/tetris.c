@@ -223,9 +223,9 @@ static void *worker_thread_proc(void *arg)
                     cursor += grid_render(&ctx->grid, cursor, sizeof(buffer) + (buffer - cursor));
 
                     size_t written = cursor - buffer;
-                    printf("Sending %zu bytes: \"", written);
-                    print_ansii(buffer, written);
-                    printf("\"\n");
+                    // printf("Sending %zu bytes: \"", written);
+                    // print_ansii(buffer, written);
+                    // printf("\"\n");
 
                     ssh_channel_write(ctx->channel, buffer, written);
                 }
