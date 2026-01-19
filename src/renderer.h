@@ -129,6 +129,7 @@ static void buf_writer_color2(buf_writer *writer, ansi_color_escape color1, ansi
 size_t renderer_clear(char *buffer, size_t buffer_size)
 {
     buf_writer writer = { .content = buffer, .capacity = buffer_size, .cursor = 0 };
+    // TODO: This doesn't seem to clear the terminal buffer. Do we need to leverage the alternative screen?
     const char clear_all[] = ANSI_RESET_COLOR ANSI_ERASE_ENTITY_SCREEN ANSI_CURSOR_HOME_POSITION ANSI_HIDE_CURSOR;
     buf_writer_write(&writer, clear_all, sizeof(clear_all) - 1);
 

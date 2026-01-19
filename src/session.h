@@ -30,7 +30,6 @@ typedef enum session_status {
 typedef struct session_ctx {
     ssh_session session;
     ssh_channel channel;
-    size_t session_idx;
     struct ssh_channel_callbacks_struct channel_cbs;
     struct ssh_server_callbacks_struct server_cbs;
 

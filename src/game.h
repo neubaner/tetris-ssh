@@ -3,7 +3,6 @@
 
 #include "renderer.h"
 #include <stdint.h>
-#include <stdio.h>
 
 typedef struct vec2i {
     int x;
@@ -97,7 +96,6 @@ void game_update(game_state *state, uint64_t dt_ns) {
             int x = offsets[i].x + state->x;
             int y = offsets[i].y + state->y + 1;
 
-            printf("offset[%d]=%2d ", i, y);
             if (y >= GAME_GRID_HEIGHT) {
                 collided = true;
                 break;
@@ -108,7 +106,6 @@ void game_update(game_state *state, uint64_t dt_ns) {
                 break;
             }
         }
-        printf("\n");
 
         if (collided) {
             for (int i = 0; i < 4; i++) {

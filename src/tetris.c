@@ -16,18 +16,20 @@
 #include <pthread.h>
 #include <threads.h>
 
-#include "session.h"
+#include "game.h"
 #include "input.h"
-#include "session_manager.h"
+#include "session.h"
+#include "session_pool.h"
+#include "session_scheduler.h"
 #include "spsc_queue.h"
 #include "renderer.h"
-#include "game.h"
 
 // static int x = 0;
 static int y = 0;
 
 #define GAME_FRAMERATE_MS (1000 / 60)
-#define WORKER_THREADS_COUNT 8
+#define GAME_FRAMERATE_NS ((GAME_FRAMERATE_MS) * 1000 * 1000)
+#define WORKER_THREADS_COUNT 12
 #define WORKER_THREAD_SESSION_COUNT_MAX 1024
 
 static uint64_t get_nanos(void)
@@ -44,13 +46,14 @@ typedef struct worker_thread {
     ssh_event event;
 
     spsc_queue incoming_sessions;
-    session_manager session_manager;
+    session_pool session_pool;
+    session_scheduler scheduler;
 } worker_thread;
 
 static worker_thread worker_threads[WORKER_THREADS_COUNT] = {0};
 
-void print_ansii(const char *buffer, size_t size) {
-
+void print_ansii(const char *buffer, size_t size) 
+{
     for (size_t i = 0; i < size; i++) {
         char c = buffer[i];
         if (isprint(c)) {
@@ -67,7 +70,7 @@ static void *worker_thread_proc(void *arg)
     for(;;) {
         ssh_session new_session;
         while (spsc_queue_shift(&thread->incoming_sessions, (void **)&new_session)) {
-            session_ctx *ctx = session_manager_add(&thread->session_manager, new_session);
+            session_ctx *ctx = session_pool_add(&thread->session_pool, new_session);
 
             if (ctx == NULL) {
                 fprintf(stderr, "No empty session slot found on thread %zu\n", thread->id);
@@ -75,65 +78,74 @@ static void *worker_thread_proc(void *arg)
                 continue;
             }
 
-            printf("Accepted connection on thread %zu and slot %zu\n", thread->id, ctx->session_idx);
+            printf("Accepted connection on thread %zu\n", thread->id);
 
             // TODO: Does this block for too long?
             if (ssh_handle_key_exchange(ctx->session) != SSH_OK) {
                 fprintf(stderr, "%s\n", ssh_get_error(ctx->session));
                 ssh_free(ctx->session);
-                session_manager_remove(&thread->session_manager, ctx->session_idx);
+                session_pool_remove(&thread->session_pool, ctx);
                 continue;
             }
 
             if (ssh_event_add_session(thread->event, ctx->session) != SSH_OK) {
                 fprintf(stderr, "%s\n", strerror(errno));
                 ssh_free(ctx->session);
-                session_manager_remove(&thread->session_manager, ctx->session_idx);
+                session_pool_remove(&thread->session_pool, ctx);
                 continue;
             };
 
             ctx->last_frame_ns = get_nanos();
+
+            session_scheduler_insert(&thread->scheduler, (session_scheduler_item) {
+                .ctx = ctx,
+                .timestamp = ctx->last_frame_ns,
+            });
         }
 
-        uint64_t poll_timeout;
-#if 0
-        if (timestamp > next_frame_min_timestamp) {
-            poll_timeout = 0;
+        uint64_t current_ns;
+        uint64_t poll_timeout_ns;
+        session_scheduler_item item;
+
+        current_ns = get_nanos();
+        if (session_scheduler_min(&thread->scheduler, &item)) {
+            uint64_t next_frame_ns = item.timestamp;
+
+            if (next_frame_ns > current_ns) {
+                // Wait up to the next frame time
+                poll_timeout_ns = next_frame_ns - current_ns;
+            } else {
+                // We have a frame to compute, don't wait on poll
+                poll_timeout_ns = 0;
+            }
         } else {
-            // Take half of that it would take for the next frame as milliseconds
-            poll_timeout = (next_frame_min_timestamp - timestamp) / (2 * 1000);
-            // Clamp the value to INT_MAX to prevent overflow
-            poll_timeout = poll_timeout > INT_MAX ? INT_MAX : poll_timeout;
-            // If the next frame will happen in the next GAME_DT_MS milliseconds, wait for a single millisecond.
-            // I'm not sure if with a large number of players this can be problematically...
-            poll_timeout = poll_timeout <= GAME_DT_MS ? 1 : poll_timeout;
+            // No sessions are scheduled. Wait for a frame.
+            poll_timeout_ns = GAME_FRAMERATE_NS;
         }
-#else
-        poll_timeout = 0;
-#endif
+        // Subtract slack_ns from poll_timeout_ns to wake up the thread before a full frame would have elapsed.
+        // The kernel mostly likely will not wake up the thread in time.
+        const uint64_t slack_ns = 1 * 1000 * 1000;
+        poll_timeout_ns = poll_timeout_ns > slack_ns ? poll_timeout_ns - slack_ns : 0;
 
-        if(ssh_event_dopoll(thread->event, (int)poll_timeout) == SSH_ERROR) {
+        int poll_timeout_ms = poll_timeout_ns / (1000 * 1000);
+        if(ssh_event_dopoll(thread->event, poll_timeout_ms) == SSH_ERROR) {
             // If dopoll fails it means no session is attached to the event loop, we should just
             // wait for a frame and try later and try again later
             struct timespec sleep_duration = {
-                .tv_nsec = GAME_FRAMERATE_MS * 1000,
+                .tv_nsec = GAME_FRAMERATE_NS,
                 .tv_sec = 0,
             };
             nanosleep(&sleep_duration, NULL);
         }
 
-        uint64_t current_ns = get_nanos();
-        for (size_t idx = 0; idx < thread->session_manager.sessions_count; idx++) {
-            session_ctx *ctx = &thread->session_manager.sessions[idx];
-            uint64_t next_frame_ns = ctx->last_frame_ns + (GAME_FRAMERATE_MS * 1000 * 1000);
-
-            if (next_frame_ns > current_ns) {
-                continue;
-            }
-
+        current_ns = get_nanos();
+        while (session_scheduler_extract_min_threshold(&thread->scheduler, current_ns, &item)) {
+            session_ctx *ctx = item.ctx;
+            assert(ctx != NULL);
             uint64_t dt_ns = current_ns - ctx->last_frame_ns;
 
-            switch (ctx->status) {
+            session_status status = ctx->status;
+            switch (status) {
             case SESSION_STATUS_CLOSING: {
                 printf("Closing...\n");
                 char buffer[4 * 1024] = {0};
@@ -157,11 +169,14 @@ static void *worker_thread_proc(void *arg)
                     ssh_disconnect(ctx->session);
                     ssh_event_remove_session(thread->event, ctx->session);
                     ssh_free(ctx->session);
-                    session_manager_remove(&thread->session_manager, idx);
+                    session_pool_remove(&thread->session_pool, ctx);
+                    ctx = NULL;
                 }
             } break;
             case SESSION_STATUS_ALIVE: {
                 int dx = 0;
+
+                // TODO: Should this me moved to the game loop?
                 while (!ring_buf_is_empty(&ctx->key_reader.buf)) {
                     key_press_result result = key_press_read(&ctx->key_reader);
 
@@ -196,6 +211,7 @@ static void *worker_thread_proc(void *arg)
                 }
 
                 if (ctx->channel != NULL) {
+                    // That's probably more than plently for most use cases
                     char buffer[4 * 1024] = {0};
                     char *cursor = buffer;
 
@@ -203,30 +219,12 @@ static void *worker_thread_proc(void *arg)
 
                     grid_clear(&ctx->grid);
 
-                    // const char input[] = "Hello World!";
-                    // size_t input_len = sizeof(input) - 1;
-
-                    // grid_box(&ctx->grid, 0, 0, 1, 1);
-                    // grid_box(&ctx->grid, x, y, input_len + 1, 2);
-                    // grid_string(&ctx->grid, input, x + 1, y + 1);
-                    // tetrimino_render(&ctx->grid, x + 1, y + 1, TETRIMINO_TYPE_T);
-
-                    // for (tetrimino_type type = 0; type < TETRIMINO_TYPE_COUNT; type++) {
-                    //     int xx = ((type % 3) * 9) + 4;
-                    //     int yy = ((type / 3) * 4) + 4;
-                    //     tetrimino_render(&ctx->grid, x + xx, y + yy, type);
-                    // }
-
                     ctx->game_state.x += dx;
                     game_update(&ctx->game_state, dt_ns);
                     game_render(&ctx->game_state, &ctx->grid);
                     cursor += grid_render(&ctx->grid, cursor, sizeof(buffer) + (buffer - cursor));
 
                     size_t written = cursor - buffer;
-                    // printf("Sending %zu bytes: \"", written);
-                    // print_ansii(buffer, written);
-                    // printf("\"\n");
-
                     ssh_channel_write(ctx->channel, buffer, written);
                 }
 
@@ -236,7 +234,14 @@ static void *worker_thread_proc(void *arg)
             }
 
             current_ns = get_nanos();
-            ctx->last_frame_ns = current_ns;
+            if (ctx != NULL) {
+                ctx->last_frame_ns = current_ns;
+
+                session_scheduler_insert(&thread->scheduler, (session_scheduler_item) {
+                    .ctx = ctx,
+                    .timestamp = ctx->last_frame_ns + GAME_FRAMERATE_NS
+                });
+            }
         }
     }
 
@@ -257,6 +262,7 @@ static void setup_workers(void)
 
         worker_threads[id].id = id;
         worker_threads[id].event = event;
+        session_pool_init(&worker_threads[id].session_pool);
 
         if ((result = pthread_create(&worker_threads[id].thread, NULL, worker_thread_proc, (void *)&worker_threads[id])) != 0) {
             fprintf(stderr, "ERROR: pthread_create %s(%d)", strerror(result), result);
@@ -320,7 +326,7 @@ int main(void)
 
         int thread_index = 0;
         for (int i = 0, min = INT_MAX; i < WORKER_THREADS_COUNT; i++) {
-            int session_count = worker_threads[i].session_manager.sessions_count;
+            int session_count = worker_threads[i].session_pool.sessions_count;
             if (session_count < min) {
                 thread_index = i;
                 min = session_count;
