@@ -152,7 +152,7 @@ static void *worker_thread_proc(void *arg)
                 char buffer[4 * 1024] = {0};
                 char *cursor = buffer;
 
-                cursor += renderer_clear(cursor, sizeof(buffer) + (buffer - cursor));
+                cursor += renderer_clear(&ctx->renderer, cursor, sizeof(buffer) + (buffer - cursor));
                 size_t written = cursor - buffer;
                 ssh_channel_write(ctx->channel, buffer, written);
 
@@ -216,14 +216,12 @@ static void *worker_thread_proc(void *arg)
                     char buffer[4 * 1024] = {0};
                     char *cursor = buffer;
 
-                    cursor += renderer_clear(cursor, sizeof(buffer) + (buffer - cursor));
-
-                    grid_clear(&ctx->grid);
+                    cursor += renderer_clear(&ctx->renderer, cursor, sizeof(buffer) + (buffer - cursor));
 
                     ctx->game_state.x += dx;
                     game_update(&ctx->game_state, dt_ns);
-                    game_render(&ctx->game_state, &ctx->grid);
-                    cursor += grid_render(&ctx->grid, cursor, sizeof(buffer) + (buffer - cursor));
+                    game_render(&ctx->game_state, &ctx->renderer);
+                    cursor += renderer_render(&ctx->renderer, cursor, sizeof(buffer) + (buffer - cursor));
 
                     size_t written = cursor - buffer;
                     ssh_channel_write(ctx->channel, buffer, written);

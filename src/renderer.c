@@ -2,6 +2,7 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "renderer.h"
 
@@ -86,67 +87,65 @@ static void buf_writer_color2(buf_writer *writer, ansi_color_escape color1, ansi
 #define ANSI_HIDE_CURSOR "\x1b[?25l"
 #define ANSI_RESET_COLOR "\x1b[0m"
 
-size_t renderer_clear(char *buffer, size_t buffer_size)
+size_t renderer_clear(renderer *renderer, char *buffer, size_t buffer_size)
 {
     buf_writer writer = { .content = buffer, .capacity = buffer_size, .cursor = 0 };
     // TODO: This doesn't seem to clear the terminal buffer. Do we need to leverage the alternative screen?
     const char clear_all[] = ANSI_RESET_COLOR ANSI_ERASE_ENTITY_SCREEN ANSI_CURSOR_HOME_POSITION ANSI_HIDE_CURSOR;
     buf_writer_write(&writer, clear_all, sizeof(clear_all) - 1);
 
+    memset(renderer->cells, 0, sizeof(renderer->cells));
+
     return writer.cursor;
 }
 
-void grid_set_piece(grid *grid, int x, int y, cell cell)
+void renderer_set_cell(renderer *renderer, int x, int y, cell cell)
 {
     if (x >= 0 && x < GRID_WIDTH && y >= 0 && y < GRID_HEIGHT) {
-        grid->cells[y][x] = cell;
+        renderer->cells[y][x] = cell;
     }
 }
 
-void grid_clear(grid *grid) {
-    memset(grid, 0 , sizeof(*grid));
-}
-
-void grid_square(grid *grid, int x, int y, ansi_color color)
+void renderer_square(renderer *renderer, int x, int y, ansi_color color)
 {
-    grid_set_piece(grid, x, y, (cell) { .bg = color, .fg = ANSI_COLOR_DEFAULT, .ch.bytes = {' '} });
-    grid_set_piece(grid, x + 1, y, (cell) { .bg = color, .fg = ANSI_COLOR_DEFAULT, .ch.bytes = {' '} });
+    renderer_set_cell(renderer, x, y, (cell) { .bg = color, .fg = ANSI_COLOR_DEFAULT, .ch.bytes = {' '} });
+    renderer_set_cell(renderer, x + 1, y, (cell) { .bg = color, .fg = ANSI_COLOR_DEFAULT, .ch.bytes = {' '} });
 }
 
-void grid_string(grid *grid, const char *str, int x, int y)
+void renderer_string(renderer *renderer, const char *str, int x, int y)
 {
     // TODO: Handle utf-8
     for (int i = 0; str[i] != '\0'; i++) {
         char c = str[i];
-        grid_set_piece(grid, x + i, y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch.bytes = {c} });
+        renderer_set_cell(renderer, x + i, y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch.bytes = {c} });
     }
 }
 
 // Draws a box around the @x and @y position, that can fit @width and @height characters.
-void grid_box(grid *grid, int x, int y, int width, int height)
+void renderer_box(renderer *renderer, int x, int y, int width, int height)
 {
     int left_x = x - 1;
     int right_x = x + width;
     int top_y = y - 1;
     int bot_y = y + height;
 
-    grid_set_piece(grid, left_x, top_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_DOWN_RIGHT });
-    grid_set_piece(grid, right_x, top_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_DOWN_LEFT });
-    grid_set_piece(grid, left_x, bot_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_UP_RIGHT });
-    grid_set_piece(grid, right_x, bot_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_UP_LEFT });
+    renderer_set_cell(renderer, left_x, top_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_DOWN_RIGHT });
+    renderer_set_cell(renderer, right_x, top_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_DOWN_LEFT });
+    renderer_set_cell(renderer, left_x, bot_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_UP_RIGHT });
+    renderer_set_cell(renderer, right_x, bot_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_UP_LEFT });
 
     for (int xx = left_x + 1; xx < right_x; xx++) {
-        grid_set_piece(grid, xx, top_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_HORIZONTAL });
-        grid_set_piece(grid, xx, bot_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_HORIZONTAL });
+        renderer_set_cell(renderer, xx, top_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_HORIZONTAL });
+        renderer_set_cell(renderer, xx, bot_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_HORIZONTAL });
     }
 
     for (int yy = top_y + 1; yy < bot_y; yy++) {
-        grid_set_piece(grid, left_x, yy, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_VERTICAL });
-        grid_set_piece(grid, right_x, yy, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_VERTICAL });
+        renderer_set_cell(renderer, left_x, yy, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_VERTICAL });
+        renderer_set_cell(renderer, right_x, yy, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_VERTICAL });
     }
 }
 
-size_t grid_render(grid *grid, char *buffer, size_t buffer_size)
+size_t renderer_render(renderer *renderer, char *buffer, size_t buffer_size)
 {
     int cursor_x = 0;
     int cursor_y = 0;
@@ -156,7 +155,7 @@ size_t grid_render(grid *grid, char *buffer, size_t buffer_size)
 
     for (int y = 0; y < GRID_HEIGHT; y++) {
         for (int x = 0; x < GRID_WIDTH; x++) {
-            cell cell = grid->cells[y][x];
+            cell cell = renderer->cells[y][x];
             if (cell.ch.bytes[0] == '\0') {
                 continue;
             }

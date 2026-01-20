@@ -36,7 +36,7 @@ session_ctx *session_pool_add(session_pool *pool, ssh_session session)
 void session_pool_remove(session_pool *pool, session_ctx *ctx)
 {
     session_slot *slot = (session_slot *)ctx;
-    assert(slot >= pool->slots && slot <= &pool->slots[SESSION_MANAGER_SESSION_COUNT_MAX]);
+    assert(slot >= pool->slots && slot <= &pool->slots[SESSION_MANAGER_SESSION_COUNT_MAX - 1]);
 
     slot->next_free = pool->next_free_slot;
     pool->next_free_slot = slot;

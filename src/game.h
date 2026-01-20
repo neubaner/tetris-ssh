@@ -36,9 +36,6 @@ typedef enum block_state {
     BLOCK_STATE_RED = BLOCK_STATE_FILLED | (ANSI_COLOR_RED & 0xff),
 } block_state;
 
-// 1 second
-#define FALLOUT_TIMER ((300ull * 1000 * 1000))
-
 typedef struct game_state {
     block_state grid[GAME_GRID_HEIGHT][GAME_GRID_WIDTH];
     tetrimino_type type;
@@ -49,6 +46,6 @@ typedef struct game_state {
 
 void game_init(game_state *state);
 void game_update(game_state *state, uint64_t dt_ns);
-void game_render(game_state *state, grid *grid);
+void game_render(game_state *state, renderer *grid);
 
 #endif // TETRIS_SSH_GAME_H

@@ -36,7 +36,7 @@ typedef struct session_ctx {
     struct pty_data pty;
     session_status status;
     uint64_t last_frame_ns;
-    grid grid;
+    renderer renderer;
     game_state game_state;
 } session_ctx;
 

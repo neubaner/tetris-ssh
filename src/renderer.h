@@ -38,24 +38,22 @@ typedef struct cell {
 #define GRID_HEIGHT (60 * 1)
 #define GRID_WIDTH (60 * 2)
 
-typedef struct grid {
+typedef struct renderer {
     cell cells[GRID_HEIGHT][GRID_WIDTH];
-} grid;
+} renderer;
 
 
-size_t renderer_clear(char *buffer, size_t buffer_size);
+size_t renderer_clear(renderer *renderer, char *buffer, size_t buffer_size);
 
-void grid_set_piece(grid *grid, int x, int y, cell cell);
+void renderer_set_cell(renderer *renderer, int x, int y, cell cell);
 
-void grid_clear(grid *grid);
+void renderer_square(renderer *renderer, int x, int y, ansi_color color);
 
-void grid_square(grid *grid, int x, int y, ansi_color color);
-
-void grid_string(grid *grid, const char *str, int x, int y);
+void renderer_string(renderer *renderer, const char *str, int x, int y);
 
 // Draws a box around the @x and @y position, that can fit @width and @height characters.
-void grid_box(grid *grid, int x, int y, int width, int height);
+void renderer_box(renderer *renderer, int x, int y, int width, int height);
 
-size_t grid_render(grid *grid, char *buffer, size_t buffer_size);
+size_t renderer_render(renderer *renderer, char *buffer, size_t buffer_size);
 
 #endif // TETRIS_SSH_RENDERER_H

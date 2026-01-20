@@ -2,12 +2,12 @@ CFLAGS=-std=c11 -Wall -Wextra -Werror -pedantic -ggdb -O3 -MMD -MP $(shell pkg-c
 LDFLAGS=$(shell pkg-config --libs libssh) -lpthread
 TEST_FLAGS=-DTEST_COLOR_OUTPUT
 
-SOURCES=$(notdir $(wildcard src/*.c))
-OBJS=$(SOURCES:%.c=obj/%.o)
+SOURCES=$(wildcard src/*.c)
+OBJS=$(SOURCES:src/%.c=obj/%.o)
 DEPS=$(OBJS:%.o=%.d)
 
-TEST_SOURCES=$(notdir $(wildcard tests/*.c))
-TEST_BINS=$(TEST_SOURCES:%.c=obj/%)
+TEST_SOURCES=$(wildcard tests/*.c)
+TEST_BINS=$(TEST_SOURCES:tests/%.c=obj/%)
 TEST_DEPS=$(TEST_BINS:%=%.d)
 
 all: tetris tests
