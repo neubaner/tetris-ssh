@@ -1,28 +1,38 @@
-CFLAGS=-std=c11 -Wall -Wextra -Werror -pedantic -ggdb -O3 $(shell pkg-config --cflags libssh)
+CFLAGS=-std=c11 -Wall -Wextra -Werror -pedantic -ggdb -O3 -MMD -MP $(shell pkg-config --cflags libssh)
 LDFLAGS=$(shell pkg-config --libs libssh) -lpthread
+TEST_FLAGS=-DTEST_COLOR_OUTPUT
+
+SOURCES=$(notdir $(wildcard src/*.c))
+OBJS=$(SOURCES:%.c=obj/%.o)
+DEPS=$(OBJS:%.o=%.d)
+
+TEST_SOURCES=$(notdir $(wildcard tests/*.c))
+TEST_BINS=$(TEST_SOURCES:%.c=obj/%)
+TEST_DEPS=$(TEST_BINS:%=%.d)
 
 all: tetris tests
 
-obj:
-	mkdir -p $@
+obj/%.o: src/%.c
+	mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
 
-obj/tetris.o: obj src/tetris.c src/input.h src/spsc_queue.h src/ring_buf.h
-	+$(CC) $(CFLAGS) -c src/tetris.c -o obj/tetris.o
+obj/%.o: tests/%.c
+	mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
 
-tetris: obj/tetris.o
-	+$(CC) $(CFLAGS) obj/tetris.o -o tetris $(LDFLAGS)
+tetris: $(OBJS)
+	$(CC) $(CFLAGS) $^ -o tetris $(LDFLAGS)
 
-obj/ring_buf_test: tests/ring_buf_test.c tests/test_lib.h src/ring_buf.h
-	+$(CC) $(CFLAGS) tests/ring_buf_test.c -DTEST_COLOR_OUTPUT -o $@ $(LDFLAGS)
+obj/%_test: tests/%_test.c $(filter-out obj/tetris.o,$(OBJS))
+	mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(TEST_FLAGS) $^ -o $@ $(LDFLAGS)
 	./$@
 
-obj/input_test: tests/input_test.c tests/test_lib.h src/input.h src/ring_buf.h
-	+$(CC) $(CFLAGS) tests/input_test.c -DTEST_COLOR_OUTPUT -o $@ $(LDFLAGS)
-	./$@
-
-tests: obj/ring_buf_test obj/input_test
+tests: $(TEST_BINS)
 
 clean:
 	rm -rf tetris obj
 
 .PHONY: all clean tests
+
+-include $(DEPS) $(TEST_DEPS)

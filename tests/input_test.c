@@ -1,4 +1,5 @@
 #include <stdbool.h>
+#include <ctype.h>
 
 #include "test_lib.h"
 #include "../src/input.h"

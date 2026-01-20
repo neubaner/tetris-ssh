@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 199309L
 
 #include <assert.h>
+#include <ctype.h>
 #include <limits.h>
 #include <errno.h>
 #include <stddef.h>
@@ -52,7 +53,7 @@ typedef struct worker_thread {
 
 static worker_thread worker_threads[WORKER_THREADS_COUNT] = {0};
 
-void print_ansii(const char *buffer, size_t size) 
+void print_ansii(const char *buffer, size_t size)
 {
     for (size_t i = 0; i < size; i++) {
         char c = buffer[i];

@@ -26,7 +26,7 @@ typedef struct utf8_char {
 #define BOX_LIGHT_HORIZONTAL UTF8(0x2500)
 #define BOX_LIGHT_VERTICAL UTF8(0x2502)
 
-int utf8_char_length(utf8_char character) {
+inline int utf8_char_length(utf8_char character) {
     unsigned char b = character.bytes[0];
 
     // Check the first byte to determine the size of the utf-8 encoded code point
@@ -38,13 +38,12 @@ int utf8_char_length(utf8_char character) {
     return -1;
 }
 
-size_t utf8_char_write(utf8_char character, char *buffer, size_t size) {
+inline size_t utf8_char_write(utf8_char character, char *buffer, size_t size) {
     int character_size = utf8_char_length(character);
     assert(character_size > 0 && size >= (size_t)character_size);
     memcpy(buffer, &character.bytes, character_size);
 
     return character_size;
 }
-
 
 #endif

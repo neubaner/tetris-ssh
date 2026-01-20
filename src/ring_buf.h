@@ -18,22 +18,22 @@ typedef struct ring_buf {
     char buffer[RING_BUF_CAPACITY];
 } ring_buf;
 
-uint8_t ring_buf_size(const ring_buf *buf)
+inline uint8_t ring_buf_size(const ring_buf *buf)
 {
     return buf->tail - buf->head;
 }
 
-bool ring_buf_is_empty(const ring_buf *buf)
+inline bool ring_buf_is_empty(const ring_buf *buf)
 {
     return buf->head == buf->tail;
 }
 
-bool ring_buf_is_full(const ring_buf *buf)
+inline bool ring_buf_is_full(const ring_buf *buf)
 {
     return (buf->tail - buf->head) >= RING_BUF_CAPACITY;
 }
 
-char ring_buf_shift(ring_buf *buf)
+inline char ring_buf_shift(ring_buf *buf)
 {
     assert(!ring_buf_is_empty(buf));
 
@@ -43,14 +43,14 @@ char ring_buf_shift(ring_buf *buf)
     return value;
 }
 
-char ring_buf_peek(const ring_buf *buf)
+inline char ring_buf_peek(const ring_buf *buf)
 {
     assert(!ring_buf_is_empty(buf));
 
     return buf->buffer[RING_BUF_MASK(buf->head)];
 }
 
-void ring_buf_push(ring_buf *buf, char value)
+inline void ring_buf_push(ring_buf *buf, char value)
 {
     assert(!ring_buf_is_full(buf));
 

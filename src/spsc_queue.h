@@ -4,53 +4,23 @@
 #include <stdatomic.h>
 #include <stdbool.h>
 
-#define SESSION_QUEUE_CAPACITY 16
-#define SESSION_QUEUE_MASK(v) ((v) % SESSION_QUEUE_CAPACITY)
+// TODO: The capacity of the queue should not be fixed
 
+#define SESSION_QUEUE_CAPACITY 16
+
+// A single producer single consumer queue. There must be only one consumer thread and one producer thread.
+// The capacity of queue is limited by SESSION_QUEUE_CAPACITY.
 typedef struct spsc_queue {
     atomic_size_t head;
     atomic_size_t tail;
     void *ring[SESSION_QUEUE_CAPACITY];
 } spsc_queue;
 
-static bool spsc_queue__is_full(size_t head, size_t tail) {
-    return (tail - head) >= SESSION_QUEUE_CAPACITY;
-}
+// Pushes an item to the queue. Returns true if the operation was successful or false if the queue is full.
+bool spsc_queue_push(spsc_queue *queue, void *item);
 
-static bool spsc_queue__is_empty(size_t head, size_t tail) {
-    return tail == head;
-}
-
-bool spsc_queue_push(spsc_queue *queue, void *item)
-{
-    size_t tail = atomic_load_explicit(&queue->tail, memory_order_relaxed);
-    size_t next_tail = tail + 1;
-    size_t head = atomic_load_explicit(&queue->head, memory_order_acquire);
-
-    if (spsc_queue__is_full(head, tail)) {
-        return false;
-    }
-
-    queue->ring[SESSION_QUEUE_MASK(tail)] = item;
-    atomic_store_explicit(&queue->tail, next_tail, memory_order_release);
-
-    return true;
-}
-
-bool spsc_queue_shift(spsc_queue *queue, void **item)
-{
-    size_t head = atomic_load_explicit(&queue->head, memory_order_relaxed);
-    size_t next_head = head + 1;
-    size_t tail = atomic_load_explicit(&queue->tail, memory_order_acquire);
-
-    if (spsc_queue__is_empty(head, tail)) {
-        return false;
-    }
-
-    *item = queue->ring[SESSION_QUEUE_MASK(head)];
-    atomic_store_explicit(&queue->head, next_head, memory_order_release);
-
-    return true;
-}
+// Removes the first item in the queue and set it to value pointed by `item`. Returns true if the operation
+// was successful or false if the queue was empty.
+bool spsc_queue_shift(spsc_queue *queue, void **item);
 
 #endif // TETRIS_SSH_SPSC_QUEUE_H

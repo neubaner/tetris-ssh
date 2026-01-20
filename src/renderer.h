@@ -4,7 +4,6 @@
 #include <assert.h>
 #include <stddef.h>
 #include <stdbool.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -27,8 +26,6 @@ typedef enum ansi_color {
     ANSI_COLOR_X(ANSI_COLOR_ENUM)
 } ansi_color;
 
-typedef uint8_t ansi_color_escape;
-
 #define ANSI_FG(color) ((color) + 30)
 #define ANSI_BG(color) ((color) + 40)
 
@@ -45,184 +42,20 @@ typedef struct grid {
     cell cells[GRID_HEIGHT][GRID_WIDTH];
 } grid;
 
-typedef struct cursor {
-    int x;
-    int y;
-} cursor;
 
-typedef struct buf_writer {
-    char *content;
-    size_t capacity;
-    size_t cursor;
-} buf_writer;
+size_t renderer_clear(char *buffer, size_t buffer_size);
 
-static void buf_writer_write_unchecked(buf_writer *writer, const char *data, size_t size)
-{
-    memcpy(&writer->content[writer->cursor], data, size);
-    writer->cursor += size;
-}
+void grid_set_piece(grid *grid, int x, int y, cell cell);
 
-static void buf_writer_write(buf_writer *writer, const char *data, size_t size)
-{
-    assert(writer->capacity - writer->cursor >= size);
-    buf_writer_write_unchecked(writer, data, size);
-}
+void grid_clear(grid *grid);
 
-static void buf_writer_utf8(buf_writer *writer, utf8_char ch)
-{
-    const size_t remaining_capacity = writer->capacity - writer->cursor;
-    writer->cursor += utf8_char_write(ch, &writer->content[writer->cursor], remaining_capacity);
-}
+void grid_square(grid *grid, int x, int y, ansi_color color);
 
-static void buf_writer_int(buf_writer *writer, int value)
-{
-    char buffer[16];
-    char *cursor = buffer + sizeof(buffer) - 1;
-    int minus_sign = value < 0 ? true : false;
-
-    do {
-        int temp_value = value;
-        value = value / 10;
-        int removed_digit = temp_value - (value * 10);
-
-        *cursor-- = (char)(removed_digit + '0');
-    } while(value);
-
-    if (minus_sign) {
-        *cursor-- = '-';
-    }
-
-    buf_writer_write(writer, cursor + 1, sizeof(buffer) - (cursor - buffer) - 1);
-}
-
-static void buf_writer_cursor_to(buf_writer *writer, int x, int y)
-{
-    buf_writer_write(writer, "\x1b[", 2);
-    buf_writer_int(writer, y);
-    buf_writer_write(writer, ";", 1);
-    buf_writer_int(writer, x);
-    buf_writer_write(writer, "H", 1);
-}
-
-static void buf_writer_color1(buf_writer *writer, ansi_color_escape color)
-{
-    buf_writer_write(writer, "\x1b[", 2);
-    buf_writer_int(writer, color);
-    buf_writer_write(writer, "m", 1);
-}
-
-static void buf_writer_color2(buf_writer *writer, ansi_color_escape color1, ansi_color_escape color2)
-{
-    buf_writer_write(writer, "\x1b[", 2);
-    buf_writer_int(writer, color1);
-    buf_writer_write(writer, ";", 1);
-    buf_writer_int(writer, color2);
-    buf_writer_write(writer, "m", 1);
-}
-
-#define ANSI_ERASE_ENTITY_SCREEN "\x1b[2J"
-#define ANSI_CURSOR_HOME_POSITION "\x1b[H"
-#define ANSI_HIDE_CURSOR "\x1b[?25l"
-#define ANSI_HIDE_CURSOR "\x1b[?25l"
-#define ANSI_RESET_COLOR "\x1b[0m"
-
-size_t renderer_clear(char *buffer, size_t buffer_size)
-{
-    buf_writer writer = { .content = buffer, .capacity = buffer_size, .cursor = 0 };
-    // TODO: This doesn't seem to clear the terminal buffer. Do we need to leverage the alternative screen?
-    const char clear_all[] = ANSI_RESET_COLOR ANSI_ERASE_ENTITY_SCREEN ANSI_CURSOR_HOME_POSITION ANSI_HIDE_CURSOR;
-    buf_writer_write(&writer, clear_all, sizeof(clear_all) - 1);
-
-    return writer.cursor;
-}
-
-void grid_set_piece(grid *grid, int x, int y, cell cell)
-{
-    if (x >= 0 && x < GRID_WIDTH && y >= 0 && y < GRID_HEIGHT) {
-        grid->cells[y][x] = cell;
-    }
-}
-
-void grid_clear(grid *grid) {
-    memset(grid, 0 , sizeof(*grid));
-}
-
-void grid_square(grid *grid, int x, int y, ansi_color color)
-{
-    grid_set_piece(grid, x, y, (cell) { .bg = color, .fg = ANSI_COLOR_DEFAULT, .ch.bytes = {' '} });
-    grid_set_piece(grid, x + 1, y, (cell) { .bg = color, .fg = ANSI_COLOR_DEFAULT, .ch.bytes = {' '} });
-}
-
-void grid_string(grid *grid, const char *str, int x, int y)
-{
-    // TODO: Handle utf-8
-    for (int i = 0; str[i] != '\0'; i++) {
-        char c = str[i];
-        grid_set_piece(grid, x + i, y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch.bytes = {c} });
-    }
-}
+void grid_string(grid *grid, const char *str, int x, int y);
 
 // Draws a box around the @x and @y position, that can fit @width and @height characters.
-void grid_box(grid *grid, int x, int y, int width, int height)
-{
-    int left_x = x - 1;
-    int right_x = x + width;
-    int top_y = y - 1;
-    int bot_y = y + height;
+void grid_box(grid *grid, int x, int y, int width, int height);
 
-    grid_set_piece(grid, left_x, top_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_DOWN_RIGHT });
-    grid_set_piece(grid, right_x, top_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_DOWN_LEFT });
-    grid_set_piece(grid, left_x, bot_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_UP_RIGHT });
-    grid_set_piece(grid, right_x, bot_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_UP_LEFT });
-
-    for (int xx = left_x + 1; xx < right_x; xx++) {
-        grid_set_piece(grid, xx, top_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_HORIZONTAL });
-        grid_set_piece(grid, xx, bot_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_HORIZONTAL });
-    }
-
-    for (int yy = top_y + 1; yy < bot_y; yy++) {
-        grid_set_piece(grid, left_x, yy, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_VERTICAL });
-        grid_set_piece(grid, right_x, yy, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_VERTICAL });
-    }
-}
-
-size_t grid_render(grid *grid, char *buffer, size_t buffer_size)
-{
-    int cursor_x = 0;
-    int cursor_y = 0;
-    ansi_color fg = ANSI_COLOR_DEFAULT;
-    ansi_color bg = ANSI_COLOR_DEFAULT;
-    buf_writer writer = { .content = buffer, .capacity = buffer_size, .cursor = 0 };
-
-    for (int y = 0; y < GRID_HEIGHT; y++) {
-        for (int x = 0; x < GRID_WIDTH; x++) {
-            cell cell = grid->cells[y][x];
-            if (cell.ch.bytes[0] == '\0') {
-                continue;
-            }
-
-            if (cursor_x != x || cursor_y != y) {
-                buf_writer_cursor_to(&writer, x + 1, y + 1);
-            }
-
-            if (fg != cell.fg && bg != cell.bg) {
-                buf_writer_color2(&writer, ANSI_FG(cell.fg), ANSI_BG(cell.bg));
-                fg = cell.fg;
-                bg = cell.bg;
-            } else if (bg != cell.bg) {
-                buf_writer_color1(&writer, ANSI_BG(cell.bg));
-                bg = cell.bg;
-            } else if (fg != cell.fg) {
-                buf_writer_color1(&writer, ANSI_FG(cell.fg));
-                fg = cell.fg;
-            }
-            buf_writer_utf8(&writer, cell.ch);
-            cursor_x = x + 1;
-            cursor_y = y;
-        }
-    }
-
-    return writer.cursor;
-}
+size_t grid_render(grid *grid, char *buffer, size_t buffer_size);
 
 #endif // TETRIS_SSH_RENDERER_H
