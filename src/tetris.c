@@ -25,9 +25,6 @@
 #include "spsc_queue.h"
 #include "renderer.h"
 
-// static int x = 0;
-static int y = 0;
-
 #define GAME_FRAMERATE_MS (1000 / 60)
 #define GAME_FRAMERATE_NS ((GAME_FRAMERATE_MS) * 1000 * 1000)
 #define WORKER_THREADS_COUNT 12
@@ -175,8 +172,6 @@ static void *worker_thread_proc(void *arg)
                 }
             } break;
             case SESSION_STATUS_ALIVE: {
-                int dx = 0;
-
                 // TODO: Should this me moved to the game loop?
                 while (!ring_buf_is_empty(&ctx->key_reader.buf)) {
                     key_press_result result = key_press_read(&ctx->key_reader);
@@ -196,19 +191,11 @@ static void *worker_thread_proc(void *arg)
                         printf("%s\n", key_kind_str(press.kind));
                     }
 
-                    int speed = press.kind == KEY_KIND_CHAR && isupper(press.ch) ? 2 : 1;
-
-                    if ((press.kind == KEY_KIND_CHAR && tolower(press.ch) == 'j') || press.kind == KEY_KIND_ARROW_DOWN) {
-                        y += 1 * speed;
-                    } else if ((press.kind == KEY_KIND_CHAR && tolower(press.ch) == 'k') || press.kind == KEY_KIND_ARROW_UP) {
-                        y -= 1 * speed;
-                    } else if ((press.kind == KEY_KIND_CHAR && tolower(press.ch) == 'h') || press.kind == KEY_KIND_ARROW_LEFT) {
-                        dx -= 1 * speed;
-                    } else if ((press.kind == KEY_KIND_CHAR && tolower(press.ch) == 'l') || press.kind == KEY_KIND_ARROW_RIGHT) {
-                        dx += 1 * speed;
-                    } else if (press.kind == KEY_KIND_CTRL && press.ch == 'C') {
+                    if (press.kind == KEY_KIND_CTRL && press.ch == 'C') {
                         ctx->status = SESSION_STATUS_CLOSING;
                     }
+
+                    game_input(&ctx->game_state, press);
                 }
 
                 if (ctx->channel != NULL) {
@@ -218,7 +205,6 @@ static void *worker_thread_proc(void *arg)
 
                     cursor += renderer_clear(&ctx->renderer, cursor, sizeof(buffer) + (buffer - cursor));
 
-                    ctx->game_state.x += dx;
                     game_update(&ctx->game_state, dt_ns);
                     game_render(&ctx->game_state, &ctx->renderer);
                     cursor += renderer_render(&ctx->renderer, cursor, sizeof(buffer) + (buffer - cursor));

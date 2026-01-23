@@ -48,6 +48,7 @@ key_press_result key_press_read(key_press_reader *reader)
                         .press.kind = KEY_KIND_CTRL,
                     };
                 } else if (isprint(top)) {
+                    // TODO: Handle UTF-8 characters
                     return (key_press_result) {
                         .press.ch = top,
                         .press.kind = KEY_KIND_CHAR,
@@ -59,6 +60,7 @@ key_press_result key_press_read(key_press_reader *reader)
             }
         } break;
         case KEY_PRESS_READER_STATE_ESCAPE: {
+            // TODO: There must be some timeout to handle the ESC key as a separate key
             if (top == '[') {
                 reader->state = KEY_PRESS_READER_STATE_CSI;
             } else {
