@@ -68,6 +68,6 @@ typedef struct game_state {
 void game_init(game_state *state);
 void game_input(game_state *state, key_press key_press);
 void game_update(game_state *state, uint64_t dt_ns);
-void game_render(game_state *state, renderer *grid);
+void game_render(const game_state *state, renderer *grid);
 
 #endif // TETRIS_SSH_GAME_H
