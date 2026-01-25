@@ -43,6 +43,8 @@ typedef struct renderer {
 } renderer;
 
 
+size_t renderer_enter_alt_screen(char *buffer, size_t buffer_size);
+size_t renderer_exit_alt_screen(char *buffer, size_t buffer_size);
 size_t renderer_clear(renderer *renderer, char *buffer, size_t buffer_size);
 
 void renderer_set_cell(renderer *renderer, int x, int y, cell cell);

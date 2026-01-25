@@ -87,6 +87,7 @@ ssh_channel channel_open(ssh_session session, void *userdata)
 
     ctx->channel = ssh_channel_new(session);
     session_ctx_setup_channel_callbacks(ctx);
+    ctx->status = SESSION_STATUS_CHANNEL_OPEN;
 
     return ctx->channel;
 }

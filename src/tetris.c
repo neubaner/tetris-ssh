@@ -94,6 +94,7 @@ static void *worker_thread_proc(void *arg)
             };
 
             ctx->last_frame_ns = get_nanos();
+            ctx->status = SESSION_STATUS_CHANNEL_PENDING;
 
             session_scheduler_insert(&thread->scheduler, (session_scheduler_item) {
                 .ctx = ctx,
@@ -146,10 +147,10 @@ static void *worker_thread_proc(void *arg)
             switch (status) {
             case SESSION_STATUS_CLOSING: {
                 printf("Closing...\n");
-                char buffer[4 * 1024] = {0};
+                char buffer[16] = {0};
                 char *cursor = buffer;
 
-                cursor += renderer_clear(&ctx->renderer, cursor, sizeof(buffer) + (buffer - cursor));
+                cursor += renderer_exit_alt_screen(cursor, sizeof(buffer) + (buffer - cursor));
                 size_t written = cursor - buffer;
                 ssh_channel_write(ctx->channel, buffer, written);
 
@@ -170,6 +171,20 @@ static void *worker_thread_proc(void *arg)
                     session_pool_remove(&thread->session_pool, ctx);
                     ctx = NULL;
                 }
+            } break;
+            case SESSION_STATUS_CHANNEL_PENDING: {
+            } break;
+            case SESSION_STATUS_CHANNEL_OPEN: {
+                // TODO: We should not need a separate buffer to write to the channel.
+                // Going to alternative screen has a well-known size and we can just use it...
+                char buffer[32] = {0};
+                char *cursor = buffer;
+
+                cursor += renderer_enter_alt_screen(cursor, sizeof(buffer) + (buffer - cursor));
+                size_t written = cursor - buffer;
+                ssh_channel_write(ctx->channel, buffer, written);
+
+                ctx->status = SESSION_STATUS_ALIVE;
             } break;
             case SESSION_STATUS_ALIVE: {
                 // TODO: Should this me moved to the game loop?

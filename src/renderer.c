@@ -81,17 +81,35 @@ static void buf_writer_color2(buf_writer *writer, ansi_color_escape color1, ansi
     buf_writer_write(writer, "m", 1);
 }
 
-#define ANSI_ERASE_ENTITY_SCREEN "\x1b[2J"
+#define ANSI_ERASE_ENTIRE_SCREEN "\x1b[2J"
 #define ANSI_CURSOR_HOME_POSITION "\x1b[H"
 #define ANSI_HIDE_CURSOR "\x1b[?25l"
 #define ANSI_HIDE_CURSOR "\x1b[?25l"
 #define ANSI_RESET_COLOR "\x1b[0m"
+#define ANSI_ENTER_ALT_SCREEN_SAVE_CURSOR "\x1b[?1049h"
+#define ANSI_EXIT_ALT_SCREEN_RESTORE_CURSOR "\x1b[?1049l"
+
+size_t renderer_enter_alt_screen(char *buffer, size_t buffer_size)
+{
+    buf_writer writer = { .content = buffer, .capacity = buffer_size, .cursor = 0 };
+    buf_writer_write(&writer, ANSI_ENTER_ALT_SCREEN_SAVE_CURSOR, sizeof(ANSI_ENTER_ALT_SCREEN_SAVE_CURSOR) - 1);
+
+    return writer.cursor;
+}
+
+size_t renderer_exit_alt_screen(char *buffer, size_t buffer_size)
+{
+    buf_writer writer = { .content = buffer, .capacity = buffer_size, .cursor = 0 };
+    buf_writer_write(&writer, ANSI_EXIT_ALT_SCREEN_RESTORE_CURSOR, sizeof(ANSI_EXIT_ALT_SCREEN_RESTORE_CURSOR) - 1);
+
+    return writer.cursor;
+}
 
 size_t renderer_clear(renderer *renderer, char *buffer, size_t buffer_size)
 {
     buf_writer writer = { .content = buffer, .capacity = buffer_size, .cursor = 0 };
     // TODO: This doesn't seem to clear the terminal buffer. Do we need to leverage the alternative screen?
-    const char clear_all[] = ANSI_RESET_COLOR ANSI_ERASE_ENTITY_SCREEN ANSI_CURSOR_HOME_POSITION ANSI_HIDE_CURSOR;
+    const char clear_all[] = ANSI_RESET_COLOR ANSI_ERASE_ENTIRE_SCREEN ANSI_CURSOR_HOME_POSITION ANSI_HIDE_CURSOR;
     buf_writer_write(&writer, clear_all, sizeof(clear_all) - 1);
 
     memset(renderer->cells, 0, sizeof(renderer->cells));
