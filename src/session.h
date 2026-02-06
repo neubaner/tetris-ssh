@@ -19,6 +19,7 @@ typedef struct pty_data {
 } pty_data;
 
 typedef enum session_status {
+    SESSION_STATUS_KEY_EXCHANGE_PENDING,
     SESSION_STATUS_CHANNEL_PENDING,
     SESSION_STATUS_CHANNEL_OPEN,
     SESSION_STATUS_ALIVE,

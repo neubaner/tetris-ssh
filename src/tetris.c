@@ -68,6 +68,7 @@ static void *worker_thread_proc(void *arg)
     for(;;) {
         ssh_session new_session;
         while (spsc_queue_shift(&thread->incoming_sessions, (void **)&new_session)) {
+            ssh_set_blocking(new_session, false);
             session_ctx *ctx = session_pool_add(&thread->session_pool, new_session);
 
             if (ctx == NULL) {
@@ -78,23 +79,8 @@ static void *worker_thread_proc(void *arg)
 
             printf("Accepted connection on thread %zu\n", thread->id);
 
-            // TODO: Does this block for too long?
-            if (ssh_handle_key_exchange(ctx->session) != SSH_OK) {
-                fprintf(stderr, "%s\n", ssh_get_error(ctx->session));
-                ssh_free(ctx->session);
-                session_pool_remove(&thread->session_pool, ctx);
-                continue;
-            }
-
-            if (ssh_event_add_session(thread->event, ctx->session) != SSH_OK) {
-                fprintf(stderr, "%s\n", strerror(errno));
-                ssh_free(ctx->session);
-                session_pool_remove(&thread->session_pool, ctx);
-                continue;
-            };
-
             ctx->last_frame_ns = get_nanos();
-            ctx->status = SESSION_STATUS_CHANNEL_PENDING;
+            ctx->status = SESSION_STATUS_KEY_EXCHANGE_PENDING;
 
             session_scheduler_insert(&thread->scheduler, (session_scheduler_item) {
                 .ctx = ctx,
@@ -170,6 +156,27 @@ static void *worker_thread_proc(void *arg)
                     ssh_free(ctx->session);
                     session_pool_remove(&thread->session_pool, ctx);
                     ctx = NULL;
+                }
+            } break;
+            case SESSION_STATUS_KEY_EXCHANGE_PENDING: {
+                int rc = ssh_handle_key_exchange(ctx->session);
+
+                if (rc == SSH_OK) {
+                    ctx->status = SESSION_STATUS_CHANNEL_PENDING;
+
+                    // Key exchange was successful, now we can add the session to the event pool
+                    if (ssh_event_add_session(thread->event, ctx->session) != SSH_OK) {
+                        fprintf(stderr, "Could not add the session to the event pool: %s\n", strerror(errno));
+                        ctx->status = SESSION_STATUS_CLOSING;
+                    };
+                } else if (rc == SSH_ERROR) {
+                    fprintf(stderr, "Got SSH_ERROR %s\n", ssh_get_error(ctx->session));
+                    ctx->status = SESSION_STATUS_CLOSING;
+                } else if (rc == SSH_AGAIN) {
+                    fprintf(stderr, "Got SSH_AGAIN\n");
+                } else {
+                    fprintf(stderr, "Unknown return code while doing key exchange: %d\n", rc);
+                    ctx->status = SESSION_STATUS_CLOSING;
                 }
             } break;
             case SESSION_STATUS_CHANNEL_PENDING: {
