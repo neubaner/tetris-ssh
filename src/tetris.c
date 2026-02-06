@@ -27,6 +27,7 @@
 
 #define GAME_FRAMERATE_MS (1000 / 60)
 #define GAME_FRAMERATE_NS ((GAME_FRAMERATE_MS) * 1000 * 1000)
+#define SESSION_TIMEOUT_NS ((uint64_t)5 * 1000 * 1000 * 1000)
 #define WORKER_THREADS_COUNT 12
 #define WORKER_THREAD_SESSION_COUNT_MAX 1024
 
@@ -79,7 +80,9 @@ static void *worker_thread_proc(void *arg)
 
             printf("Accepted connection on thread %zu\n", thread->id);
 
-            ctx->last_frame_ns = get_nanos();
+            uint64_t current_ns = get_nanos();
+            ctx->last_frame_ns = current_ns;
+            ctx->timeout_dealine_ns = current_ns + SESSION_TIMEOUT_NS;
             ctx->status = SESSION_STATUS_KEY_EXCHANGE_PENDING;
 
             session_scheduler_insert(&thread->scheduler, (session_scheduler_item) {
@@ -131,40 +134,12 @@ static void *worker_thread_proc(void *arg)
 
             session_status status = ctx->status;
             switch (status) {
-            case SESSION_STATUS_CLOSING: {
-                printf("Closing...\n");
-                char buffer[16] = {0};
-                char *cursor = buffer;
-
-                cursor += renderer_exit_alt_screen(cursor, sizeof(buffer) + (buffer - cursor));
-                size_t written = cursor - buffer;
-                ssh_channel_write(ctx->channel, buffer, written);
-
-                ssh_channel_send_eof(ctx->channel);
-                ssh_channel_request_send_exit_status(ctx->channel, 0);
-                ssh_channel_close(ctx->channel);
-                ssh_channel_free(ctx->channel);
-                ctx->status = SESSION_STATUS_DEAD;
-            } break;
-            case SESSION_STATUS_DEAD: {
-                printf("Killing %d...\n", ssh_get_status(ctx->session));
-                // TODO: We should have a timeout to forcelly close the connection.
-                if ((ssh_get_status(ctx->session) & (SSH_CLOSED | SSH_CLOSED_ERROR)) != 0) {
-                    printf("Freaking killed!\n");
-                    ssh_disconnect(ctx->session);
-                    ssh_event_remove_session(thread->event, ctx->session);
-                    ssh_free(ctx->session);
-                    session_pool_remove(&thread->session_pool, ctx);
-                    ctx = NULL;
-                }
-            } break;
             case SESSION_STATUS_KEY_EXCHANGE_PENDING: {
                 int rc = ssh_handle_key_exchange(ctx->session);
 
                 if (rc == SSH_OK) {
                     ctx->status = SESSION_STATUS_CHANNEL_PENDING;
-
-                    // Key exchange was successful, now we can add the session to the event pool
+                    // Key exchange was successful, now we can add the session to the event loop
                     if (ssh_event_add_session(thread->event, ctx->session) != SSH_OK) {
                         fprintf(stderr, "Could not add the session to the event pool: %s\n", strerror(errno));
                         ctx->status = SESSION_STATUS_CLOSING;
@@ -174,12 +149,21 @@ static void *worker_thread_proc(void *arg)
                     ctx->status = SESSION_STATUS_CLOSING;
                 } else if (rc == SSH_AGAIN) {
                     fprintf(stderr, "Got SSH_AGAIN\n");
+
+                    if (ctx->timeout_dealine_ns < current_ns) {
+                        // We could not do a key exchange within the timeout.
+                        ctx->status = SESSION_STATUS_CLOSING;
+                    }
                 } else {
                     fprintf(stderr, "Unknown return code while doing key exchange: %d\n", rc);
                     ctx->status = SESSION_STATUS_CLOSING;
                 }
             } break;
             case SESSION_STATUS_CHANNEL_PENDING: {
+                if (ctx->timeout_dealine_ns < current_ns) {
+                    // The channel was not created within the timeout, close the session.
+                    ctx->status = SESSION_STATUS_CLOSING;
+                }
             } break;
             case SESSION_STATUS_CHANNEL_OPEN: {
                 // TODO: We should not need a separate buffer to write to the channel.
@@ -235,6 +219,35 @@ static void *worker_thread_proc(void *arg)
                     ssh_channel_write(ctx->channel, buffer, written);
                 }
 
+            } break;
+            case SESSION_STATUS_CLOSING: {
+                if (ctx->channel != NULL) {
+                    char buffer[16] = {0};
+                    char *cursor = buffer;
+
+                    cursor += renderer_exit_alt_screen(cursor, sizeof(buffer) + (buffer - cursor));
+                    size_t written = cursor - buffer;
+                    ssh_channel_write(ctx->channel, buffer, written);
+
+                    ssh_channel_send_eof(ctx->channel);
+                    ssh_channel_request_send_exit_status(ctx->channel, 0);
+                    ssh_channel_close(ctx->channel);
+                    ssh_channel_free(ctx->channel);
+                }
+                ctx->status = SESSION_STATUS_DEAD;
+                ctx->timeout_dealine_ns = current_ns + SESSION_TIMEOUT_NS;
+            } break;
+            case SESSION_STATUS_DEAD: {
+                int is_session_closed = (ssh_get_status(ctx->session) & (SSH_CLOSED | SSH_CLOSED_ERROR)) != 0;
+
+                // Either close the session immediatly when it is closed or when the timeout is expired.
+                if (is_session_closed || ctx->timeout_dealine_ns < current_ns) {
+                    ssh_disconnect(ctx->session);
+                    ssh_event_remove_session(thread->event, ctx->session);
+                    ssh_free(ctx->session);
+                    session_pool_remove(&thread->session_pool, ctx);
+                    ctx = NULL;
+                }
             } break;
             default:
                 break;

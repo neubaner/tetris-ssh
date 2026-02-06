@@ -34,10 +34,11 @@ typedef struct session_ctx {
     struct ssh_server_callbacks_struct server_cbs;
 
     const char *username;
+    uint64_t last_frame_ns;
+    uint64_t timeout_dealine_ns;
     key_press_reader key_reader;
     struct pty_data pty;
     session_status status;
-    uint64_t last_frame_ns;
     renderer renderer;
     game_state game_state;
 } session_ctx;

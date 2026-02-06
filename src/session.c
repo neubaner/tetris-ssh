@@ -1,4 +1,6 @@
 #include "session.h"
+#include "libssh/libssh.h"
+#include <stdio.h>
 
 int shell_request(ssh_session session, ssh_channel channel, void *userdata)
 {
@@ -92,16 +94,34 @@ ssh_channel channel_open(ssh_session session, void *userdata)
     return ctx->channel;
 }
 
+void channel_closed(ssh_session session, ssh_channel channel, void *userdata)
+{
+    (void)session;
+    (void)channel;
+
+    session_ctx *ctx = (session_ctx *)userdata;
+    fprintf(stderr, "Channel closed\n");
+    ctx->status = SESSION_STATUS_CLOSING;
+}
+
 int pubkey_auth(ssh_session session, const char *user, struct ssh_key_struct *pubkey, char signature_state, void *userdata)
 {
     (void)session;
     (void)pubkey;
     (void)signature_state;
 
-    // TODO: is this really all we need to so for our use case?
+    if (signature_state == SSH_PUBLICKEY_STATE_NONE) {
+        return SSH_AUTH_SUCCESS;
+    }
+
+    if (signature_state != SSH_PUBLICKEY_STATE_VALID) {
+        return SSH_AUTH_DENIED;
+    }
+
     session_ctx *ctx = (session_ctx *)userdata;
     ctx->username = user;
 
+    fprintf(stderr, "Authenticated. user=%s signature_state=%02x\n", user, (unsigned char)signature_state);
     // Anyone can play :)
     return SSH_AUTH_SUCCESS;
 }
@@ -125,6 +145,7 @@ void session_ctx_setup_channel_callbacks(session_ctx *ctx)
         .channel_shell_request_function = shell_request,
         .channel_data_function = data_function,
         .channel_pty_window_change_function = pty_window_change,
+        .channel_close_function = channel_closed,
     };
     ssh_callbacks_init(&ctx->channel_cbs);
     ssh_set_channel_callbacks(ctx->channel, &ctx->channel_cbs);
