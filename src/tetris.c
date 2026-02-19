@@ -70,13 +70,19 @@ static void *worker_thread_proc(void *arg)
         ssh_session new_session;
         while (spsc_queue_shift(&thread->incoming_sessions, (void **)&new_session)) {
             ssh_set_blocking(new_session, false);
-            session_ctx *ctx = session_pool_add(&thread->session_pool, new_session);
 
+            session_ctx *ctx = session_pool_alloc(&thread->session_pool);
             if (ctx == NULL) {
                 fprintf(stderr, "No empty session slot found on thread %zu\n", thread->id);
-                ssh_free(ctx->session);
+                ssh_free(new_session);
                 continue;
             }
+
+            *ctx = (session_ctx) {
+                .session = new_session,
+                .status = SESSION_STATUS_ALIVE,
+            };
+            session_ctx_setup_server_callbacks(ctx);
 
             printf("Accepted connection on thread %zu\n", thread->id);
 
@@ -175,6 +181,7 @@ static void *worker_thread_proc(void *arg)
                 size_t written = cursor - buffer;
                 ssh_channel_write(ctx->channel, buffer, written);
 
+                game_init(&ctx->game_state);
                 ctx->status = SESSION_STATUS_ALIVE;
             } break;
             case SESSION_STATUS_ALIVE: {
@@ -245,7 +252,7 @@ static void *worker_thread_proc(void *arg)
                     ssh_disconnect(ctx->session);
                     ssh_event_remove_session(thread->event, ctx->session);
                     ssh_free(ctx->session);
-                    session_pool_remove(&thread->session_pool, ctx);
+                    session_pool_free(&thread->session_pool, ctx);
                     ctx = NULL;
                 }
             } break;

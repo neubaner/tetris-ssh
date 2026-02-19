@@ -24,9 +24,9 @@ typedef struct session_pool {
 
 void session_pool_init(session_pool *pool);
 
-session_ctx *session_pool_add(session_pool *pool, ssh_session session);
+session_ctx *session_pool_alloc(session_pool *pool);
 
-void session_pool_remove(session_pool *pool, session_ctx *ctx);
+void session_pool_free(session_pool *pool, session_ctx *ctx);
 
 
 #endif // TETRIS_SSH_SESSION_MANAGER_H

@@ -11,7 +11,7 @@ void session_pool_init(session_pool *pool)
     pool->sessions_count = 0;
 }
 
-session_ctx *session_pool_add(session_pool *pool, ssh_session session)
+session_ctx *session_pool_alloc(session_pool *pool)
 {
     session_slot *slot = pool->next_free_slot;
 
@@ -20,20 +20,13 @@ session_ctx *session_pool_add(session_pool *pool, ssh_session session)
     }
 
     session_slot *next_free_slot = slot->next_free;
-    slot->session = (session_ctx) {
-        .session = session,
-        .status = SESSION_STATUS_ALIVE,
-    };
-    session_ctx_setup_server_callbacks(&slot->session);
-    game_init(&slot->session.game_state);
-
     pool->next_free_slot = next_free_slot;
     pool->sessions_count++;
 
     return &slot->session;
 }
 
-void session_pool_remove(session_pool *pool, session_ctx *ctx)
+void session_pool_free(session_pool *pool, session_ctx *ctx)
 {
     session_slot *slot = (session_slot *)ctx;
     assert(slot >= pool->slots && slot <= &pool->slots[SESSION_MANAGER_SESSION_COUNT_MAX - 1]);
