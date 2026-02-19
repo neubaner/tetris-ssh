@@ -48,26 +48,5 @@ typedef struct session_ctx {
 #define ANSI_HIDE_CURSOR "\x1b[?25l"
 
 void session_ctx_setup_server_callbacks(session_ctx *ctx);
-void session_ctx_setup_channel_callbacks(session_ctx *ctx);
-
-int shell_request(ssh_session session, ssh_channel channel, void *userdata);
-int pty_request(ssh_session session,
-                       ssh_channel channel,
-                       const char *term,
-                       int width, int height,
-                       int pxwidth, int pxheight,
-                       void *userdata);
-
-int data_function(ssh_session session, ssh_channel channel, void *data, uint32_t len, int is_stderr, void *userdata);
-
-int pty_window_change(ssh_session session,
-                             ssh_channel channel,
-                             int width, int height,
-                             int pxwidth, int pwheight,
-                             void *userdata);
-
-ssh_channel channel_open(ssh_session session, void *userdata);
-
-int pubkey_auth(ssh_session session, const char *user, struct ssh_key_struct *pubkey, char signature_state, void *userdata);
 
 #endif // TETRIS_SSH_SESSION_H
