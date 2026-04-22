@@ -29,6 +29,7 @@ typedef enum ansi_color {
 #define ANSI_FG(color) ((color) + 30)
 #define ANSI_BG(color) ((color) + 40)
 
+// TODO: This cell wastes too much space
 typedef struct cell {
     ansi_color fg;
     ansi_color bg;
@@ -39,7 +40,10 @@ typedef struct cell {
 #define GRID_WIDTH (60 * 2)
 
 typedef struct renderer {
-    cell cells[GRID_HEIGHT][GRID_WIDTH];
+    cell cells[2][GRID_HEIGHT][GRID_WIDTH];
+    int front_buffer_idx;
+    ansi_color fg;
+    ansi_color bg;
 } renderer;
 
 

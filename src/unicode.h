@@ -26,16 +26,14 @@ typedef struct utf8_char {
 #define BOX_LIGHT_HORIZONTAL UTF8(0x2500)
 #define BOX_LIGHT_VERTICAL UTF8(0x2502)
 
+// Computes the length of a valid UTF-8 character
 inline int utf8_char_length(utf8_char character) {
-    unsigned char b = character.bytes[0];
+    unsigned int b = character.bytes[0];
+    int leading_ones = __builtin_clz(~((b << 24)));
 
-    // Check the first byte to determine the size of the utf-8 encoded code point
-    if ((b & 0x80) == 0x00) { return 1; } // 0xxxxxxx
-    if ((b & 0xE0) == 0xC0) { return 2; } // 110xxxxx
-    if ((b & 0xF0) == 0xE0) { return 3; } // 1110xxxx
-    if ((b & 0xF8) == 0xF0) { return 4; } // 11110xxx
-
-    return -1;
+    // The size of an UTF-8 character is the number of leading ones, or zero leading zeros
+    // when the char has length 1. `!leading_ones` ensures that the latter case holds.
+    return leading_ones + !leading_ones;
 }
 
 inline size_t utf8_char_write(utf8_char character, char *buffer, size_t size) {

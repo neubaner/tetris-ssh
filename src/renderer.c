@@ -120,7 +120,7 @@ size_t renderer_clear(renderer *renderer, char *buffer, size_t buffer_size)
 void renderer_set_cell(renderer *renderer, int x, int y, cell cell)
 {
     if (x >= 0 && x < GRID_WIDTH && y >= 0 && y < GRID_HEIGHT) {
-        renderer->cells[y][x] = cell;
+        renderer->cells[renderer->front_buffer_idx][y][x] = cell;
     }
 }
 
@@ -167,37 +167,62 @@ size_t renderer_render(renderer *renderer, char *buffer, size_t buffer_size)
 {
     int cursor_x = 0;
     int cursor_y = 0;
-    ansi_color fg = ANSI_COLOR_DEFAULT;
-    ansi_color bg = ANSI_COLOR_DEFAULT;
+    int front_buffer_idx = renderer->front_buffer_idx;
+    int back_buffer_idx = renderer->front_buffer_idx ? 0 : 1;
     buf_writer writer = { .content = buffer, .capacity = buffer_size, .cursor = 0 };
+
+    buf_writer_write(&writer, ANSI_CURSOR_HOME_POSITION, sizeof(ANSI_CURSOR_HOME_POSITION) - 1);
 
     for (int y = 0; y < GRID_HEIGHT; y++) {
         for (int x = 0; x < GRID_WIDTH; x++) {
-            cell cell = renderer->cells[y][x];
-            if (cell.ch.bytes[0] == '\0') {
-                continue;
-            }
+            cell front_cell = renderer->cells[front_buffer_idx][y][x];
+            cell back_cell = renderer->cells[back_buffer_idx][y][x];
 
-            if (cursor_x != x || cursor_y != y) {
-                buf_writer_cursor_to(&writer, x + 1, y + 1);
-            }
+            if (memcmp(&front_cell, &back_cell, sizeof(front_cell)) != 0)
+            {
+                if (cursor_x != x || cursor_y != y) {
+                    buf_writer_cursor_to(&writer, x + 1, y + 1);
+                }
 
-            if (fg != cell.fg && bg != cell.bg) {
-                buf_writer_color2(&writer, ANSI_FG(cell.fg), ANSI_BG(cell.bg));
-                fg = cell.fg;
-                bg = cell.bg;
-            } else if (bg != cell.bg) {
-                buf_writer_color1(&writer, ANSI_BG(cell.bg));
-                bg = cell.bg;
-            } else if (fg != cell.fg) {
-                buf_writer_color1(&writer, ANSI_FG(cell.fg));
-                fg = cell.fg;
+                // TODO: Refactor
+                unsigned char empty[4] = {0};
+                if (memcmp(front_cell.ch.bytes, empty, sizeof(empty)) == 0) {
+                    if (renderer->fg != ANSI_COLOR_DEFAULT && renderer->bg != ANSI_COLOR_DEFAULT) {
+                        buf_writer_color2(&writer, ANSI_FG(ANSI_COLOR_DEFAULT), ANSI_BG(ANSI_COLOR_DEFAULT));
+                        renderer->fg = ANSI_COLOR_DEFAULT;
+                        renderer->bg = ANSI_COLOR_DEFAULT;
+                    } else if (renderer->fg != ANSI_COLOR_DEFAULT) {
+                        buf_writer_color1(&writer, ANSI_FG(ANSI_COLOR_DEFAULT));
+                        renderer->fg = ANSI_COLOR_DEFAULT;
+                    } else if (renderer->bg != ANSI_COLOR_DEFAULT) {
+                        buf_writer_color1(&writer, ANSI_BG(ANSI_COLOR_DEFAULT));
+                        renderer->bg = ANSI_COLOR_DEFAULT;
+                    }
+
+                    buf_writer_utf8(&writer, (utf8_char){{' '}});
+                } else {
+                    if (renderer->fg != front_cell.fg && renderer->bg != front_cell.bg) {
+                        buf_writer_color2(&writer, ANSI_FG(front_cell.fg), ANSI_BG(front_cell.bg));
+                        renderer->fg = front_cell.fg;
+                        renderer->bg = front_cell.bg;
+                    } else if (renderer->bg != front_cell.bg) {
+                        buf_writer_color1(&writer, ANSI_BG(front_cell.bg));
+                        renderer->bg = front_cell.bg;
+                    } else if (renderer->fg != front_cell.fg) {
+                        buf_writer_color1(&writer, ANSI_FG(front_cell.fg));
+                        renderer->fg = front_cell.fg;
+                    }
+                    buf_writer_utf8(&writer, front_cell.ch);
+                }
+                cursor_x = x + 1;
+                cursor_y = y;
             }
-            buf_writer_utf8(&writer, cell.ch);
-            cursor_x = x + 1;
-            cursor_y = y;
         }
     }
 
-    return writer.cursor;
+    // Swap buffer
+    memset(renderer->cells[back_buffer_idx], 0, sizeof(renderer->cells[0]));
+    renderer->front_buffer_idx = back_buffer_idx;
+
+    return cursor_x != 0 && cursor_y != 0 ? writer.cursor : 0;
 }
