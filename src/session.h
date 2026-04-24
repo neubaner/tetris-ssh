@@ -7,13 +7,6 @@
 #include "game.h"
 #include "input.h"
 
-typedef struct pty_win_size {
-    int width;
-    int height;
-    int px_width;
-    int px_height;
-} pty_win_size;
-
 typedef struct pty_data {
     pty_win_size win_size;
 } pty_data;

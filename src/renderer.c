@@ -8,9 +8,6 @@
 
 typedef uint8_t ansi_color_escape;
 
-#define ANSI_FG(color) ((color) + 30)
-#define ANSI_BG(color) ((color) + 40)
-
 typedef struct buf_writer {
     char *content;
     size_t capacity;
@@ -39,7 +36,7 @@ static void buf_writer_int(buf_writer *writer, int value)
 {
     char buffer[16];
     char *cursor = buffer + sizeof(buffer) - 1;
-    int minus_sign = value < 0 ? true : false;
+    bool minus_sign = value < 0 ? true : false;
 
     do {
         int temp_value = value;
@@ -53,7 +50,7 @@ static void buf_writer_int(buf_writer *writer, int value)
         *cursor-- = '-';
     }
 
-    buf_writer_write(writer, cursor + 1, sizeof(buffer) - (cursor - buffer) - 1);
+    buf_writer_write(writer, cursor + 1, sizeof(buffer) + (buffer - cursor - 1));
 }
 
 static void buf_writer_cursor_to(buf_writer *writer, int x, int y)
@@ -163,16 +160,21 @@ void renderer_box(renderer *renderer, int x, int y, int width, int height)
     }
 }
 
-size_t renderer_render(renderer *renderer, char *buffer, size_t buffer_size)
+size_t renderer_render(renderer *renderer, pty_win_size win_size, char *buffer, size_t buffer_size)
 {
+    (void)win_size;
+
     int cursor_x = 0;
     int cursor_y = 0;
+    ansi_color current_bg = ANSI_COLOR_DEFAULT;
+    ansi_color current_fg = ANSI_COLOR_DEFAULT;
     int front_buffer_idx = renderer->front_buffer_idx;
     int back_buffer_idx = renderer->front_buffer_idx ? 0 : 1;
     buf_writer writer = { .content = buffer, .capacity = buffer_size, .cursor = 0 };
 
     buf_writer_write(&writer, ANSI_CURSOR_HOME_POSITION, sizeof(ANSI_CURSOR_HOME_POSITION) - 1);
 
+    // TODO: Fix tearing when screen resizes
     for (int y = 0; y < GRID_HEIGHT; y++) {
         for (int x = 0; x < GRID_WIDTH; x++) {
             cell front_cell = renderer->cells[front_buffer_idx][y][x];
@@ -187,30 +189,30 @@ size_t renderer_render(renderer *renderer, char *buffer, size_t buffer_size)
                 // TODO: Refactor
                 unsigned char empty[4] = {0};
                 if (memcmp(front_cell.ch.bytes, empty, sizeof(empty)) == 0) {
-                    if (renderer->fg != ANSI_COLOR_DEFAULT && renderer->bg != ANSI_COLOR_DEFAULT) {
+                    if (current_fg != ANSI_COLOR_DEFAULT && current_bg != ANSI_COLOR_DEFAULT) {
                         buf_writer_color2(&writer, ANSI_FG(ANSI_COLOR_DEFAULT), ANSI_BG(ANSI_COLOR_DEFAULT));
-                        renderer->fg = ANSI_COLOR_DEFAULT;
-                        renderer->bg = ANSI_COLOR_DEFAULT;
-                    } else if (renderer->fg != ANSI_COLOR_DEFAULT) {
+                        current_fg = ANSI_COLOR_DEFAULT;
+                        current_bg = ANSI_COLOR_DEFAULT;
+                    } else if (current_fg != ANSI_COLOR_DEFAULT) {
                         buf_writer_color1(&writer, ANSI_FG(ANSI_COLOR_DEFAULT));
-                        renderer->fg = ANSI_COLOR_DEFAULT;
-                    } else if (renderer->bg != ANSI_COLOR_DEFAULT) {
+                        current_fg = ANSI_COLOR_DEFAULT;
+                    } else if (current_bg != ANSI_COLOR_DEFAULT) {
                         buf_writer_color1(&writer, ANSI_BG(ANSI_COLOR_DEFAULT));
-                        renderer->bg = ANSI_COLOR_DEFAULT;
+                        current_bg = ANSI_COLOR_DEFAULT;
                     }
 
-                    buf_writer_utf8(&writer, (utf8_char){{' '}});
+                    buf_writer_write(&writer, " ", 1);
                 } else {
-                    if (renderer->fg != front_cell.fg && renderer->bg != front_cell.bg) {
+                    if (current_fg != front_cell.fg && current_bg != front_cell.bg) {
                         buf_writer_color2(&writer, ANSI_FG(front_cell.fg), ANSI_BG(front_cell.bg));
-                        renderer->fg = front_cell.fg;
-                        renderer->bg = front_cell.bg;
-                    } else if (renderer->bg != front_cell.bg) {
+                        current_fg = front_cell.fg;
+                        current_bg = front_cell.bg;
+                    } else if (current_bg != front_cell.bg) {
                         buf_writer_color1(&writer, ANSI_BG(front_cell.bg));
-                        renderer->bg = front_cell.bg;
-                    } else if (renderer->fg != front_cell.fg) {
+                        current_bg = front_cell.bg;
+                    } else if (current_fg != front_cell.fg) {
                         buf_writer_color1(&writer, ANSI_FG(front_cell.fg));
-                        renderer->fg = front_cell.fg;
+                        current_fg = front_cell.fg;
                     }
                     buf_writer_utf8(&writer, front_cell.ch);
                 }
@@ -219,6 +221,7 @@ size_t renderer_render(renderer *renderer, char *buffer, size_t buffer_size)
             }
         }
     }
+    buf_writer_color2(&writer, ANSI_FG(ANSI_COLOR_DEFAULT), ANSI_BG(ANSI_COLOR_DEFAULT));
 
     // Swap buffer
     memset(renderer->cells[back_buffer_idx], 0, sizeof(renderer->cells[0]));

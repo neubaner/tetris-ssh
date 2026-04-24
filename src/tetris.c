@@ -84,7 +84,11 @@ static int compute_poll_timeout(worker_thread *thread)
     }
     // Subtract slack_ns from poll_timeout_ns to wake up the thread before a full frame would have elapsed.
     // The kernel mostly likely will not wake up the thread in time.
+#if 0
     const uint64_t slack_ns = 1 * 1000 * 1000;
+#else
+    const uint64_t slack_ns = 0;
+#endif
     poll_timeout_ns = sat_sub_uint64(poll_timeout_ns, slack_ns);
 
     return poll_timeout_ns / (1000 * 1000);
@@ -226,14 +230,14 @@ static void run_sessions_tick(worker_thread *thread)
 
             if (ctx->channel != NULL) {
                 // That's probably more than plently for most use cases
-                char buffer[4 * 1024] = {0};
+                char buffer[16 * 1024] = {0};
                 char *cursor = buffer;
 
                 // cursor += renderer_clear(&ctx->renderer, cursor, sizeof(buffer) + (buffer - cursor));
 
                 game_update(&ctx->game_state, dt_ns);
                 game_render(&ctx->game_state, &ctx->renderer);
-                cursor += renderer_render(&ctx->renderer, cursor, sizeof(buffer) + (buffer - cursor));
+                cursor += renderer_render(&ctx->renderer, ctx->pty.win_size, cursor, sizeof(buffer) + (buffer - cursor));
 
                 size_t written = cursor - buffer;
                 ssh_channel_write(ctx->channel, buffer, written);

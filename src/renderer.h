@@ -29,6 +29,13 @@ typedef enum ansi_color {
 #define ANSI_FG(color) ((color) + 30)
 #define ANSI_BG(color) ((color) + 40)
 
+typedef struct pty_win_size {
+    int width;
+    int height;
+    int px_width;
+    int px_height;
+} pty_win_size;
+
 // TODO: This cell wastes too much space
 typedef struct cell {
     ansi_color fg;
@@ -41,9 +48,8 @@ typedef struct cell {
 
 typedef struct renderer {
     cell cells[2][GRID_HEIGHT][GRID_WIDTH];
+    pty_win_size prev_win_size;
     int front_buffer_idx;
-    ansi_color fg;
-    ansi_color bg;
 } renderer;
 
 
@@ -60,6 +66,6 @@ void renderer_string(renderer *renderer, const char *str, int x, int y);
 // Draws a box around the @x and @y position, that can fit @width and @height characters.
 void renderer_box(renderer *renderer, int x, int y, int width, int height);
 
-size_t renderer_render(renderer *renderer, char *buffer, size_t buffer_size);
+size_t renderer_render(renderer *renderer, pty_win_size win_size, char *buffer, size_t buffer_size);
 
 #endif // TETRIS_SSH_RENDERER_H
