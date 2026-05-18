@@ -1,5 +1,6 @@
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 #include "renderer.h"
 #include "game.h"
@@ -123,10 +124,38 @@ static void clear_rows(game_state *state)
     }
 }
 
+static void tetrimino_bag_shuffle(tetrimino_bag *bag)
+{
+    for (int i = 0; i < TETRIMINO_TYPE_COUNT; i++) {
+        bag->queue[i] = i;
+    }
+
+    // Fisher-yates shuffle
+    for (int i = TETRIMINO_TYPE_COUNT - 1; i > 0; i--) {
+        // TODO: replace rand with a proper implementation due to its poor quality.
+        // Also, each game should have its own random seed instead of sharing it with other
+        // game sessions.
+        int j = rand() % (i + 1);
+        uint8_t tmp = bag->queue[i];
+        bag->queue[i] = bag->queue[j];
+        bag->queue[j] = tmp;
+    }
+
+    bag->count = TETRIMINO_TYPE_COUNT;
+}
+
+static tetrimino_type tetrimino_bag_pull(tetrimino_bag *bag)
+{
+    if (bag->count == 0) {
+        tetrimino_bag_shuffle(bag);
+    }
+
+    return bag->queue[--bag->count];
+}
+
 static void place_new_tetrimino(game_state *state)
 {
-    // TODO: place random tetrimino
-    state->type = (state->type + 1) % TETRIMINO_TYPE_COUNT;
+    state->type = tetrimino_bag_pull(&state->bag);
     state->x = 4;
     state->y = 21;
     state->fallout_timer = FALLOUT_TIMER;
@@ -188,11 +217,8 @@ static void tetrimino_ghost_render(const game_state *state, renderer *renderer, 
 void game_init(game_state *state)
 {
     memset(state->grid, 0, sizeof(state->grid));
-    state->type = TETRIMINO_TYPE_O;
-    state->x = 4;
-    state->y = 21;
-    state->fallout_timer = FALLOUT_TIMER;
-    state->rot = TETRIMINO_ROTATION_0;
+    tetrimino_bag_shuffle(&state->bag);
+    place_new_tetrimino(state);
 }
 
 void game_input(game_state *state, key_press press)

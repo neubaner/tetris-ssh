@@ -237,9 +237,8 @@ static void run_sessions_tick(worker_thread *thread)
 
                 game_update(&ctx->game_state, dt_ns);
                 game_render(&ctx->game_state, &ctx->renderer);
-                cursor += renderer_render(&ctx->renderer, ctx->pty.win_size, cursor, sizeof(buffer) + (buffer - cursor));
 
-                size_t written = cursor - buffer;
+                size_t written = renderer_render(&ctx->renderer, ctx->pty.win_size, cursor, sizeof(buffer) + (buffer - cursor));
                 ssh_channel_write(ctx->channel, buffer, written);
 
                 if (written > 0) {
@@ -331,6 +330,9 @@ static void setup_workers(void)
 
 int main(void)
 {
+    // TODO: replace libc poor random implementation with a proper one
+    srand(time(NULL));
+
     if (ssh_init() != SSH_OK) {
         fprintf(stderr, "Failed to initialize libssh\n");
         return EXIT_FAILURE;

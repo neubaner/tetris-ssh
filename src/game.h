@@ -55,10 +55,19 @@ typedef enum game_actions {
     GAME_ACTION_ROTATE_RIGHT = 1 << 4,
 } game_actions;
 
+// Tetris uses a "bag" system to determine the sequence of Tetriminos that appear during the game.
+// Tetriminos are shuffled in a bag(represented as a queue), and are pulled from it to allows equal distribution.
+// Once the bag is empty, the tetriminos are shuffled back into it.
+typedef struct tetrimino_bag {
+    uint8_t queue[TETRIMINO_TYPE_COUNT];
+    uint8_t count;
+} tetrimino_bag;
+
 typedef struct game_state {
     block_state grid[GAME_GRID_HEIGHT][GAME_GRID_WIDTH];
     tetrimino_type type;
     tetrimino_rotation rot;
+    tetrimino_bag bag;
     int x;
     int y;
     uint64_t fallout_timer;
