@@ -5,7 +5,7 @@
 #include "renderer.h"
 #include "game.h"
 
-#define FALLOUT_TIMER ((300ull * 1000 * 1000))
+#define FALL_TIMER ((1000ull * 1000 * 1000))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define CLAMP(a, l, u) MIN(MAX(a, l), u)
@@ -158,11 +158,11 @@ static void place_new_tetrimino(game_state *state)
     state->type = tetrimino_bag_pull(&state->bag);
     state->x = 4;
     state->y = 21;
-    state->fallout_timer = FALLOUT_TIMER;
+    state->fall_timer = FALL_TIMER;
     state->rot = TETRIMINO_ROTATION_0;
 }
 
-static void move_down(game_state *state, vec2i offsets[4])
+static void hard_drop(game_state *state, vec2i offsets[4])
 {
     for (int y = state->y; y < GAME_GRID_HEIGHT; y++) {
         if (tetrimino_vert_collision_test(state, offsets, state->x, y + 1)) {
@@ -226,16 +226,18 @@ void game_input(game_state *state, key_press press)
     // Should repeated keys move the block twice?
     if ((press.kind == KEY_KIND_CHAR && (press.ch == 'j' || press.ch == 'J'))
             || press.kind == KEY_KIND_ARROW_DOWN) {
-        state->actions |= GAME_ACTION_MOVE_DOWN;
+        state->actions |= GAME_ACTION_SOFT_DROP;
+    } else if (press.kind == KEY_KIND_CHAR && press.ch == ' ') {
+        state->actions |= GAME_ACTION_HARD_DROP;
     } else if ((press.kind == KEY_KIND_CHAR && (press.ch == 'h' || press.ch == 'H'))
         || press.kind == KEY_KIND_ARROW_LEFT) {
         state->actions |= GAME_ACTION_MOVE_LEFT;
     } else if ((press.kind == KEY_KIND_CHAR && (press.ch == 'l' || press.ch == 'L'))
         || press.kind == KEY_KIND_ARROW_RIGHT) {
         state->actions |= GAME_ACTION_MOVE_RIGHT;
-    } else if ((press.kind == KEY_KIND_CHAR && (press.ch == 'r' || press.ch == 'R'))) {
+    } else if ((press.kind == KEY_KIND_CHAR && (press.ch == 'e' || press.ch == 'E'))) {
         state->actions |= GAME_ACTION_ROTATE_RIGHT;
-    } else if ((press.kind == KEY_KIND_CHAR && (press.ch == 'q' || press.ch == 'q'))) {
+    } else if ((press.kind == KEY_KIND_CHAR && (press.ch == 'q' || press.ch == 'Q'))) {
         state->actions |= GAME_ACTION_ROTATE_LEFT;
     }
 }
@@ -245,21 +247,28 @@ void game_update(game_state *state, uint64_t dt_ns)
     vec2i offsets[4];
     tetrimino_load_offset(state->type, offsets);
 
-    bool should_move_down = state->actions & GAME_ACTION_MOVE_DOWN;
-
-    if (should_move_down) {
-        move_down(state, offsets);
+    if (state->actions & GAME_ACTION_HARD_DROP) {
+        hard_drop(state, offsets);
         merge_into_board(state, offsets);
         place_new_tetrimino(state);
         clear_rows(state);
     } else {
         int dx = 0;
+        int dy = 0;
+
         if (state->actions & GAME_ACTION_MOVE_LEFT) {
             dx -= 1;
         }
+
         if (state->actions & GAME_ACTION_MOVE_RIGHT) {
             dx += 1;
         }
+
+        // TODO: Does soft drop needs a cooldown timer?
+        if (state->actions & GAME_ACTION_SOFT_DROP) {
+            dy += 1;
+        }
+
         if (state->actions & GAME_ACTION_ROTATE_LEFT) {
             state->rot = (state->rot + TETRIMINO_ROTATION_COUNT - 1) % TETRIMINO_ROTATION_COUNT;
         }
@@ -267,12 +276,15 @@ void game_update(game_state *state, uint64_t dt_ns)
             state->rot = (state->rot + 1) % TETRIMINO_ROTATION_COUNT;
         }
 
-        if (!tetrimino_hor_collision_test(state, offsets, state->x + dx, state->y)) {
+        // TODO: Implement a collision test that checks for horizontal and vertical collisions
+        if (!tetrimino_hor_collision_test(state, offsets, state->x + dx, state->y + dy)
+            && !tetrimino_vert_collision_test(state, offsets, state->x + dx, state->y + dy)) {
             state->x += dx;
+            state->y += dy;
         }
 
         // TODO: Implement fix update step
-        if (state->fallout_timer < dt_ns) {
+        if (state->fall_timer < dt_ns) {
             // If we would collide with the board when moving down, add the piece to the board
             if (tetrimino_vert_collision_test(state, offsets, state->x, state->y + 1)) {
                 merge_into_board(state, offsets);
@@ -280,10 +292,10 @@ void game_update(game_state *state, uint64_t dt_ns)
                 clear_rows(state);
             } else {
                 state->y++;
-                state->fallout_timer = FALLOUT_TIMER;
+                state->fall_timer = FALL_TIMER;
             }
         } else {
-            state->fallout_timer -= dt_ns;
+            state->fall_timer -= dt_ns;
         }
     }
 

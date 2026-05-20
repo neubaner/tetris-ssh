@@ -50,9 +50,10 @@ typedef enum game_actions {
     GAME_ACTION_NO_ACTION = 0,
     GAME_ACTION_MOVE_LEFT = 1,
     GAME_ACTION_MOVE_RIGHT = 1 << 1,
-    GAME_ACTION_MOVE_DOWN = 1 << 2,
-    GAME_ACTION_ROTATE_LEFT = 1 << 3,
-    GAME_ACTION_ROTATE_RIGHT = 1 << 4,
+    GAME_ACTION_SOFT_DROP = 1 << 2,
+    GAME_ACTION_HARD_DROP = 1 << 3,
+    GAME_ACTION_ROTATE_LEFT = 1 << 4,
+    GAME_ACTION_ROTATE_RIGHT = 1 << 5,
 } game_actions;
 
 // Tetris uses a "bag" system to determine the sequence of Tetriminos that appear during the game.
@@ -70,7 +71,7 @@ typedef struct game_state {
     tetrimino_bag bag;
     int x;
     int y;
-    uint64_t fallout_timer;
+    uint64_t fall_timer;
     game_actions actions;
 } game_state;
 
