@@ -194,7 +194,7 @@ static void run_sessions_tick(worker_thread *thread)
             char buffer[32] = {0};
             char *cursor = buffer;
 
-            cursor += renderer_enter_alt_screen(cursor, sizeof(buffer) + (buffer - cursor));
+            cursor += renderer_enter(cursor, sizeof(buffer) + (buffer - cursor));
             size_t written = cursor - buffer;
             ssh_channel_write(ctx->channel, buffer, written);
 
@@ -233,8 +233,6 @@ static void run_sessions_tick(worker_thread *thread)
                 char buffer[16 * 1024] = {0};
                 char *cursor = buffer;
 
-                // cursor += renderer_clear(&ctx->renderer, cursor, sizeof(buffer) + (buffer - cursor));
-
                 game_update(&ctx->game_state, dt_ns);
                 game_render(&ctx->game_state, &ctx->renderer);
 
@@ -252,7 +250,7 @@ static void run_sessions_tick(worker_thread *thread)
                 char buffer[16] = {0};
                 char *cursor = buffer;
 
-                cursor += renderer_exit_alt_screen(cursor, sizeof(buffer) + (buffer - cursor));
+                cursor += renderer_exit(cursor, sizeof(buffer) + (buffer - cursor));
                 size_t written = cursor - buffer;
                 ssh_channel_write(ctx->channel, buffer, written);
 
