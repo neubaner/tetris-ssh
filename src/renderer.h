@@ -36,6 +36,30 @@ typedef struct pty_win_size {
     int px_height;
 } pty_win_size;
 
+typedef enum draw_command_kind {
+    DRAW_COMMAND_KIND_NONE,
+    DRAW_COMMAND_KIND_SQUARE,
+    DRAW_COMMAND_KIND_BOX,
+    DRAW_COMMAND_KIND_STRING,
+} draw_command_kind;
+
+typedef struct draw_command {
+    char kind;
+    union {
+        struct {
+            char x, y, width, height;
+        } box;
+        struct {
+            char x, y;
+            ansi_color color;
+        } square;
+        struct {
+            // TODO
+            char _pad[1];
+        } string;
+    };
+} draw_command;
+
 // TODO: This cell wastes too much space
 typedef struct cell {
     ansi_color fg;
@@ -45,9 +69,17 @@ typedef struct cell {
 
 #define GRID_HEIGHT (60 * 1)
 #define GRID_WIDTH (60 * 2)
+#define DRAW_COMMAND_MAX_SIZE 1024
+
+typedef struct draw_command_buffer
+{
+    // TODO: The command buffer size needs to be dynamic
+    draw_command commands[DRAW_COMMAND_MAX_SIZE];
+    size_t count;
+} draw_command_buffer;
 
 typedef struct renderer {
-    cell cells[2][GRID_HEIGHT][GRID_WIDTH];
+    draw_command_buffer command_buffer[2];
     pty_win_size prev_win_size;
     int front_buffer_idx;
 } renderer;
@@ -55,9 +87,6 @@ typedef struct renderer {
 
 size_t renderer_enter(char *buffer, size_t buffer_size);
 size_t renderer_exit(char *buffer, size_t buffer_size);
-size_t renderer_clear(renderer *renderer, char *buffer, size_t buffer_size);
-
-void renderer_set_cell(renderer *renderer, int x, int y, cell cell);
 
 void renderer_square(renderer *renderer, int x, int y, ansi_color color);
 

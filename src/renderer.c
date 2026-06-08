@@ -14,6 +14,10 @@ typedef struct buf_writer {
     size_t cursor;
 } buf_writer;
 
+typedef struct terminal_grid {
+    cell cells[GRID_HEIGHT][GRID_WIDTH];
+} terminal_grid;
+
 static void buf_writer_write_unchecked(buf_writer *writer, const char *data, size_t size)
 {
     memcpy(&writer->content[writer->cursor], data, size);
@@ -102,61 +106,123 @@ size_t renderer_exit(char *buffer, size_t buffer_size)
     return writer.cursor;
 }
 
-size_t renderer_clear(renderer *renderer, char *buffer, size_t buffer_size)
-{
-    buf_writer writer = { .content = buffer, .capacity = buffer_size, .cursor = 0 };
-    // TODO: This doesn't seem to clear the terminal buffer. Do we need to leverage the alternative screen?
-    const char clear_all[] = ANSI_RESET_COLOR ANSI_ERASE_ENTIRE_SCREEN ANSI_CURSOR_HOME_POSITION ANSI_HIDE_CURSOR;
-    buf_writer_write(&writer, clear_all, sizeof(clear_all) - 1);
-
-    memset(renderer->cells, 0, sizeof(renderer->cells));
-
-    return writer.cursor;
-}
-
-void renderer_set_cell(renderer *renderer, int x, int y, cell cell)
-{
-    if (x >= 0 && x < GRID_WIDTH && y >= 0 && y < GRID_HEIGHT) {
-        renderer->cells[renderer->front_buffer_idx][y][x] = cell;
-    }
-}
-
 void renderer_square(renderer *renderer, int x, int y, ansi_color color)
 {
-    renderer_set_cell(renderer, x, y, (cell) { .bg = color, .fg = ANSI_COLOR_DEFAULT, .ch.bytes = {' '} });
-    renderer_set_cell(renderer, x + 1, y, (cell) { .bg = color, .fg = ANSI_COLOR_DEFAULT, .ch.bytes = {' '} });
+    int front_buffer_idx = renderer->front_buffer_idx;
+    size_t count = renderer->command_buffer[front_buffer_idx].count;
+    if (count < DRAW_COMMAND_MAX_SIZE)
+    {
+        renderer->command_buffer[front_buffer_idx].commands[count] = (struct draw_command) {
+            .kind = DRAW_COMMAND_KIND_SQUARE,
+            .square.x = x,
+            .square.y = y,
+            .square.color = color,
+        };
+        renderer->command_buffer[front_buffer_idx].count++;
+    }
 }
 
 void renderer_string(renderer *renderer, const char *str, int x, int y)
 {
-    // TODO: Handle utf-8
-    for (int i = 0; str[i] != '\0'; i++) {
-        char c = str[i];
-        renderer_set_cell(renderer, x + i, y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch.bytes = {c} });
-    }
+    // TODO
+    (void)renderer;
+    (void)str;
+    (void)x;
+    (void)y;
 }
 
 // Draws a box around the @x and @y position, that can fit @width and @height characters.
 void renderer_box(renderer *renderer, int x, int y, int width, int height)
 {
+    int front_buffer_idx = renderer->front_buffer_idx;
+    size_t count = renderer->command_buffer[front_buffer_idx].count;
+    if (count < DRAW_COMMAND_MAX_SIZE)
+    {
+        renderer->command_buffer[front_buffer_idx].commands[count] = (struct draw_command) {
+            .kind = DRAW_COMMAND_KIND_BOX,
+            .box.x = x,
+            .box.y = y,
+            .box.width = width,
+            .box.height = height,
+        };
+        renderer->command_buffer[front_buffer_idx].count++;
+    }
+}
+
+static void rasterize_cell(terminal_grid *grid, int x, int y, cell cell)
+{
+    if (x >= 0 && x < GRID_WIDTH && y >= 0 && y < GRID_HEIGHT) {
+        grid->cells[y][x] = cell;
+    }
+}
+
+static void rasterize_square(draw_command *command, terminal_grid *grid)
+{
+    assert(command->kind == DRAW_COMMAND_KIND_SQUARE);
+    int x = command->square.x;
+    int y = command->square.y;
+    ansi_color color = command->square.color;
+
+    rasterize_cell(grid, x, y, (cell) { .bg = color, .fg = ANSI_COLOR_DEFAULT, .ch.bytes = {' '} });
+    rasterize_cell(grid, x + 1, y, (cell) { .bg = color, .fg = ANSI_COLOR_DEFAULT, .ch.bytes = {' '} });
+}
+
+static void rasterize_string(draw_command *command, terminal_grid *grid)
+{
+    // TODO
+    assert(command->kind == DRAW_COMMAND_KIND_STRING);
+    (void)command;
+    (void)grid;
+}
+
+static void rasterize_box(draw_command *command, terminal_grid *grid)
+{
+    assert(command->kind == DRAW_COMMAND_KIND_BOX);
+    int x = command->box.x;
+    int y = command->box.y;
+    int width = command->box.width;
+    int height = command->box.height;
+
     int left_x = x - 1;
     int right_x = x + width;
     int top_y = y - 1;
     int bot_y = y + height;
 
-    renderer_set_cell(renderer, left_x, top_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_DOWN_RIGHT });
-    renderer_set_cell(renderer, right_x, top_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_DOWN_LEFT });
-    renderer_set_cell(renderer, left_x, bot_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_UP_RIGHT });
-    renderer_set_cell(renderer, right_x, bot_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_UP_LEFT });
+    rasterize_cell(grid, left_x, top_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_DOWN_RIGHT });
+    rasterize_cell(grid, right_x, top_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_DOWN_LEFT });
+    rasterize_cell(grid, left_x, bot_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_UP_RIGHT });
+    rasterize_cell(grid, right_x, bot_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_UP_LEFT });
 
     for (int xx = left_x + 1; xx < right_x; xx++) {
-        renderer_set_cell(renderer, xx, top_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_HORIZONTAL });
-        renderer_set_cell(renderer, xx, bot_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_HORIZONTAL });
+        rasterize_cell(grid, xx, top_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_HORIZONTAL });
+        rasterize_cell(grid, xx, bot_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_HORIZONTAL });
     }
 
     for (int yy = top_y + 1; yy < bot_y; yy++) {
-        renderer_set_cell(renderer, left_x, yy, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_VERTICAL });
-        renderer_set_cell(renderer, right_x, yy, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_VERTICAL });
+        rasterize_cell(grid, left_x, yy, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_VERTICAL });
+        rasterize_cell(grid, right_x, yy, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_VERTICAL });
+    }
+}
+
+static void rasterize(draw_command_buffer *buffer, terminal_grid *grid)
+{
+    for (size_t i = 0; i < buffer->count; i++)
+    {
+        draw_command *command = &buffer->commands[i];
+        switch (command->kind)
+        {
+        case DRAW_COMMAND_KIND_SQUARE:
+            rasterize_square(command, grid);
+            break;
+        case DRAW_COMMAND_KIND_BOX:
+            rasterize_box(command, grid);
+            break;
+        case DRAW_COMMAND_KIND_STRING:
+            rasterize_string(command, grid);
+            break;
+        default:
+            break;
+        }
     }
 }
 
@@ -174,11 +240,19 @@ size_t renderer_render(renderer *renderer, pty_win_size win_size, char *buffer, 
 
     buf_writer_write(&writer, ANSI_CURSOR_HOME_POSITION, sizeof(ANSI_CURSOR_HOME_POSITION) - 1);
 
+    terminal_grid front_grid = {0};
+    terminal_grid back_grid = {0};
+
+    rasterize(&renderer->command_buffer[front_buffer_idx], &front_grid);
+    rasterize(&renderer->command_buffer[back_buffer_idx], &back_grid);
+
+    printf("Draw commands: %zu\n", renderer->command_buffer->count);
+
     // TODO: Fix tearing when screen resizes
     for (int y = 0; y < GRID_HEIGHT; y++) {
         for (int x = 0; x < GRID_WIDTH; x++) {
-            cell front_cell = renderer->cells[front_buffer_idx][y][x];
-            cell back_cell = renderer->cells[back_buffer_idx][y][x];
+            cell front_cell = front_grid.cells[y][x];
+            cell back_cell = back_grid.cells[y][x];
 
             if (memcmp(&front_cell, &back_cell, sizeof(front_cell)) != 0)
             {
@@ -221,11 +295,12 @@ size_t renderer_render(renderer *renderer, pty_win_size win_size, char *buffer, 
             }
         }
     }
-    buf_writer_color2(&writer, ANSI_FG(ANSI_COLOR_DEFAULT), ANSI_BG(ANSI_COLOR_DEFAULT));
+    buf_writer_write(&writer, ANSI_RESET_COLOR, sizeof(ANSI_RESET_COLOR) - 1);
 
     // Swap buffer
-    memset(renderer->cells[back_buffer_idx], 0, sizeof(renderer->cells[0]));
+    memset(&renderer->command_buffer[back_buffer_idx], 0, sizeof(renderer->command_buffer[0]));
     renderer->front_buffer_idx = back_buffer_idx;
 
+    // Cursor did not move, not need to write anything.
     return cursor_x != 0 && cursor_y != 0 ? writer.cursor : 0;
 }
