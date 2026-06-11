@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "renderer.h"
+#include "ansi.h"
 
 typedef uint8_t ansi_color_escape;
 
@@ -66,19 +67,36 @@ static void buf_writer_cursor_to(buf_writer *writer, int x, int y)
     buf_writer_write(writer, "H", 1);
 }
 
-static void buf_writer_color1(buf_writer *writer, ansi_color_escape color)
-{
-    buf_writer_write(writer, "\x1b[", 2);
-    buf_writer_int(writer, color);
-    buf_writer_write(writer, "m", 1);
-}
+// static void buf_writer_color1(buf_writer *writer, ansi_color_escape color)
+// {
+//     buf_writer_write(writer, "\x1b[", 2);
+//     buf_writer_int(writer, color);
+//     buf_writer_write(writer, "m", 1);
+// }
+//
+// static void buf_writer_color2(buf_writer *writer, ansi_color_escape color1, ansi_color_escape color2)
+// {
+//     buf_writer_write(writer, "\x1b[", 2);
+//     buf_writer_int(writer, color1);
+//     buf_writer_write(writer, ";", 1);
+//     buf_writer_int(writer, color2);
+//     buf_writer_write(writer, "m", 1);
+// }
 
-static void buf_writer_color2(buf_writer *writer, ansi_color_escape color1, ansi_color_escape color2)
+static void buf_writer_style(buf_writer *writer, cell_style style)
 {
+    int flags = CELL_STYLE_FLAGS(style);
+
+    int bg_bright_mod = flags & CELL_FLAGS_BG_BRIGHT ? ANSI_BRIGHT_MOD : 0;
+    int bg_color = ANSI_BG(CELL_STYLE_BG_COLOR(style) + bg_bright_mod);
+
+    int fg_bright_mod = flags & CELL_FLAGS_FG_BRIGHT ? ANSI_BRIGHT_MOD : 0;
+    int fg_color = ANSI_FG(CELL_STYLE_FG_COLOR(style) + fg_bright_mod);
+
     buf_writer_write(writer, "\x1b[", 2);
-    buf_writer_int(writer, color1);
+    buf_writer_int(writer, bg_color);
     buf_writer_write(writer, ";", 1);
-    buf_writer_int(writer, color2);
+    buf_writer_int(writer, fg_color);
     buf_writer_write(writer, "m", 1);
 }
 
@@ -106,7 +124,7 @@ size_t renderer_exit(char *buffer, size_t buffer_size)
     return writer.cursor;
 }
 
-void renderer_square(renderer *renderer, int x, int y, ansi_color color)
+void renderer_square(renderer *renderer, int x, int y, cell_style style)
 {
     int front_buffer_idx = renderer->front_buffer_idx;
     size_t count = renderer->command_buffer[front_buffer_idx].count;
@@ -116,7 +134,7 @@ void renderer_square(renderer *renderer, int x, int y, ansi_color color)
             .kind = DRAW_COMMAND_KIND_SQUARE,
             .square.x = x,
             .square.y = y,
-            .square.color = color,
+            .square.style = style,
         };
         renderer->command_buffer[front_buffer_idx].count++;
     }
@@ -161,10 +179,10 @@ static void rasterize_square(draw_command *command, terminal_grid *grid)
     assert(command->kind == DRAW_COMMAND_KIND_SQUARE);
     int x = command->square.x;
     int y = command->square.y;
-    ansi_color color = command->square.color;
+    cell_style style = command->square.style;
 
-    rasterize_cell(grid, x, y, (cell) { .bg = color, .fg = ANSI_COLOR_DEFAULT, .ch.bytes = {' '} });
-    rasterize_cell(grid, x + 1, y, (cell) { .bg = color, .fg = ANSI_COLOR_DEFAULT, .ch.bytes = {' '} });
+    rasterize_cell(grid, x, y, (cell) { .style = style, .ch.bytes = {' '} });
+    rasterize_cell(grid, x + 1, y, (cell) { .style = style, .ch.bytes = {' '} });
 }
 
 static void rasterize_string(draw_command *command, terminal_grid *grid)
@@ -182,25 +200,26 @@ static void rasterize_box(draw_command *command, terminal_grid *grid)
     int y = command->box.y;
     int width = command->box.width;
     int height = command->box.height;
+    cell_style style = CELL_STYLE_PACK(COLOR_DEFAULT, COLOR_DEFAULT, CELL_FLAGS_NONE);
 
     int left_x = x - 1;
     int right_x = x + width;
     int top_y = y - 1;
     int bot_y = y + height;
 
-    rasterize_cell(grid, left_x, top_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_DOWN_RIGHT });
-    rasterize_cell(grid, right_x, top_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_DOWN_LEFT });
-    rasterize_cell(grid, left_x, bot_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_UP_RIGHT });
-    rasterize_cell(grid, right_x, bot_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_UP_LEFT });
+    rasterize_cell(grid, left_x, top_y, (cell) { .style = style, .ch = BOX_LIGHT_DOWN_RIGHT });
+    rasterize_cell(grid, right_x, top_y, (cell) { .style = style, .ch = BOX_LIGHT_DOWN_LEFT });
+    rasterize_cell(grid, left_x, bot_y, (cell) { .style = style, .ch = BOX_LIGHT_UP_RIGHT });
+    rasterize_cell(grid, right_x, bot_y, (cell) { .style = style, .ch = BOX_LIGHT_UP_LEFT });
 
     for (int xx = left_x + 1; xx < right_x; xx++) {
-        rasterize_cell(grid, xx, top_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_HORIZONTAL });
-        rasterize_cell(grid, xx, bot_y, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_HORIZONTAL });
+        rasterize_cell(grid, xx, top_y, (cell) { .style = style, .ch = BOX_LIGHT_HORIZONTAL });
+        rasterize_cell(grid, xx, bot_y, (cell) { .style = style, .ch = BOX_LIGHT_HORIZONTAL });
     }
 
     for (int yy = top_y + 1; yy < bot_y; yy++) {
-        rasterize_cell(grid, left_x, yy, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_VERTICAL });
-        rasterize_cell(grid, right_x, yy, (cell) { .bg = ANSI_COLOR_DEFAULT, .fg = ANSI_COLOR_DEFAULT, .ch = BOX_LIGHT_VERTICAL });
+        rasterize_cell(grid, left_x, yy, (cell) { .style = style, .ch = BOX_LIGHT_VERTICAL });
+        rasterize_cell(grid, right_x, yy, (cell) { .style = style, .ch = BOX_LIGHT_VERTICAL });
     }
 }
 
@@ -232,21 +251,19 @@ size_t renderer_render(renderer *renderer, pty_win_size win_size, char *buffer, 
 
     int cursor_x = 0;
     int cursor_y = 0;
-    ansi_color current_bg = ANSI_COLOR_DEFAULT;
-    ansi_color current_fg = ANSI_COLOR_DEFAULT;
+    cell_style current_style = CELL_STYLE_PACK(COLOR_DEFAULT, COLOR_DEFAULT, CELL_FLAGS_NONE);
     int front_buffer_idx = renderer->front_buffer_idx;
     int back_buffer_idx = renderer->front_buffer_idx ? 0 : 1;
     buf_writer writer = { .content = buffer, .capacity = buffer_size, .cursor = 0 };
 
     buf_writer_write(&writer, ANSI_CURSOR_HOME_POSITION, sizeof(ANSI_CURSOR_HOME_POSITION) - 1);
+    buf_writer_write(&writer, ANSI_RESET_COLOR, sizeof(ANSI_RESET_COLOR) - 1);
 
     terminal_grid front_grid = {0};
     terminal_grid back_grid = {0};
 
     rasterize(&renderer->command_buffer[front_buffer_idx], &front_grid);
     rasterize(&renderer->command_buffer[back_buffer_idx], &back_grid);
-
-    printf("Draw commands: %zu\n", renderer->command_buffer->count);
 
     // TODO: Fix tearing when screen resizes
     for (int y = 0; y < GRID_HEIGHT; y++) {
@@ -260,42 +277,28 @@ size_t renderer_render(renderer *renderer, pty_win_size win_size, char *buffer, 
                     buf_writer_cursor_to(&writer, x + 1, y + 1);
                 }
 
-                // TODO: Refactor
-                unsigned char empty[4] = {0};
-                if (memcmp(front_cell.ch.bytes, empty, sizeof(empty)) == 0) {
-                    if (current_fg != ANSI_COLOR_DEFAULT && current_bg != ANSI_COLOR_DEFAULT) {
-                        buf_writer_color2(&writer, ANSI_FG(ANSI_COLOR_DEFAULT), ANSI_BG(ANSI_COLOR_DEFAULT));
-                        current_fg = ANSI_COLOR_DEFAULT;
-                        current_bg = ANSI_COLOR_DEFAULT;
-                    } else if (current_fg != ANSI_COLOR_DEFAULT) {
-                        buf_writer_color1(&writer, ANSI_FG(ANSI_COLOR_DEFAULT));
-                        current_fg = ANSI_COLOR_DEFAULT;
-                    } else if (current_bg != ANSI_COLOR_DEFAULT) {
-                        buf_writer_color1(&writer, ANSI_BG(ANSI_COLOR_DEFAULT));
-                        current_bg = ANSI_COLOR_DEFAULT;
-                    }
+                static unsigned char empty[4] = {0};
+                cell_style target_style;
+                utf8_char target_char;
 
-                    buf_writer_write(&writer, " ", 1);
+                if (memcmp(front_cell.ch.bytes, empty, sizeof(empty)) == 0) {
+                    target_style = CELL_STYLE_PACK(COLOR_DEFAULT, COLOR_DEFAULT, CELL_FLAGS_NONE);
+                    target_char = (utf8_char){{' '}};
                 } else {
-                    if (current_fg != front_cell.fg && current_bg != front_cell.bg) {
-                        buf_writer_color2(&writer, ANSI_FG(front_cell.fg), ANSI_BG(front_cell.bg));
-                        current_fg = front_cell.fg;
-                        current_bg = front_cell.bg;
-                    } else if (current_bg != front_cell.bg) {
-                        buf_writer_color1(&writer, ANSI_BG(front_cell.bg));
-                        current_bg = front_cell.bg;
-                    } else if (current_fg != front_cell.fg) {
-                        buf_writer_color1(&writer, ANSI_FG(front_cell.fg));
-                        current_fg = front_cell.fg;
-                    }
-                    buf_writer_utf8(&writer, front_cell.ch);
+                    target_style = front_cell.style;
+                    target_char = front_cell.ch;
                 }
+
+                if (current_style.data != target_style.data) {
+                    buf_writer_style(&writer, target_style);
+                    current_style = target_style;
+                }
+                buf_writer_utf8(&writer, target_char);
                 cursor_x = x + 1;
                 cursor_y = y;
             }
         }
     }
-    buf_writer_write(&writer, ANSI_RESET_COLOR, sizeof(ANSI_RESET_COLOR) - 1);
 
     // Swap buffer
     memset(&renderer->command_buffer[back_buffer_idx], 0, sizeof(renderer->command_buffer[0]));

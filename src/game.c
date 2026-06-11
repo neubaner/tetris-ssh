@@ -20,14 +20,14 @@ static const vec2i tetrimino_offsets[TETRIMINO_TYPE_COUNT][4] = {
     [TETRIMINO_TYPE_Z] = { {0, 0}, {0, -1}, {-1, -1}, {1, 0} },
 };
 
-static const ansi_color tetrimino_colors[TETRIMINO_TYPE_COUNT] = {
-    [TETRIMINO_TYPE_O] = ANSI_COLOR_BRIGHT_YELLOW,
-    [TETRIMINO_TYPE_I] = ANSI_COLOR_CYAN,
-    [TETRIMINO_TYPE_T] = ANSI_COLOR_MAGENTA,
-    [TETRIMINO_TYPE_J] = ANSI_COLOR_BLUE,
-    [TETRIMINO_TYPE_L] = ANSI_COLOR_YELLOW,
-    [TETRIMINO_TYPE_S] = ANSI_COLOR_GREEN,
-    [TETRIMINO_TYPE_Z] = ANSI_COLOR_RED,
+static const block_state tetrimino_colors[TETRIMINO_TYPE_COUNT] = {
+    [TETRIMINO_TYPE_O] = BLOCK_STATE_BRIGHT_YELLOW,
+    [TETRIMINO_TYPE_I] = BLOCK_STATE_CYAN,
+    [TETRIMINO_TYPE_T] = BLOCK_STATE_MAGENTA,
+    [TETRIMINO_TYPE_J] = BLOCK_STATE_BLUE,
+    [TETRIMINO_TYPE_L] = BLOCK_STATE_YELLOW,
+    [TETRIMINO_TYPE_S] = BLOCK_STATE_GREEN,
+    [TETRIMINO_TYPE_Z] = BLOCK_STATE_RED,
 };
 
 static void tetrimino_load_offset(tetrimino_type type, vec2i offsets[4]) {
@@ -90,7 +90,7 @@ static void merge_into_board(game_state *state, vec2i offsets[4])
         int x = rotate_offset.x + state->x;
         int y = rotate_offset.y + state->y;
 
-        state->grid[y][x] = BLOCK_STATE_FILLED | (tetrimino_colors[state->type] & 0xff);
+        state->grid[y][x] = tetrimino_colors[state->type];
     }
 }
 
@@ -179,8 +179,12 @@ static void tetrimino_render(renderer *renderer, tetrimino_type type, tetrimino_
     for (int i = 0; i < 4; i++) {
         vec2i piece_offset_orig = piece_offsets[i];
         vec2i piece_offset = tetrimino_rotate(piece_offset_orig, type, rot);
+
+        block_state block = tetrimino_colors[type];
+        uint8_t style_flags = block & BLOCK_STATE_BRIGHT ? CELL_FLAGS_BG_BRIGHT : 0;
+        cell_style style = CELL_STYLE_PACK(block & 0xFF, COLOR_DEFAULT, style_flags);
         // Squares occupies two characters wide
-        renderer_square(renderer, offset_x + (x + piece_offset.x) * 2, offset_y + piece_offset.y + y, tetrimino_colors[type]);
+        renderer_square(renderer, offset_x + (x + piece_offset.x) * 2, offset_y + piece_offset.y + y, style);
     }
 }
 
@@ -190,7 +194,9 @@ static void board_render(const game_state *state, renderer *renderer, int offset
         for (int x = 0; x < GAME_GRID_WIDTH; x++) {
             block_state block = state->grid[y][x];
             if (block & BLOCK_STATE_FILLED) {
-                renderer_square(renderer, offset_x + (x * 2), offset_y + y - 20, block & 0xff);
+                uint8_t style_flags = block & BLOCK_STATE_BRIGHT ? CELL_FLAGS_BG_BRIGHT : 0;
+                cell_style style = CELL_STYLE_PACK(block & 0xFF, COLOR_DEFAULT, style_flags);
+                renderer_square(renderer, offset_x + (x * 2), offset_y + y - 20, style);
             }
         }
     }
@@ -210,7 +216,8 @@ static void tetrimino_ghost_render(const game_state *state, renderer *renderer, 
 
     for (int i = 0; i < 4; i++) {
         vec2i piece_offset = tetrimino_rotate(offsets[i], state->type, state->rot);
-        renderer_square(renderer, offset_x + (state->x + piece_offset.x) * 2, offset_y + piece_offset.y + y - 20, ANSI_COLOR_BRIGHT_BLACK);
+        cell_style style = CELL_STYLE_PACK(COLOR_BLACK, COLOR_DEFAULT, CELL_FLAGS_BG_BRIGHT);
+        renderer_square(renderer, offset_x + (state->x + piece_offset.x) * 2, offset_y + piece_offset.y + y - 20, style);
     }
 }
 

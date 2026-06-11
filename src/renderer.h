@@ -4,30 +4,53 @@
 #include <assert.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "unicode.h"
 
-#define ANSI_COLOR_X(X) \
-    X(BLACK, 0) \
-    X(RED, 1) \
-    X(GREEN, 2) \
-    X(YELLOW, 3) \
-    X(BLUE, 4) \
-    X(MAGENTA, 5) \
-    X(CYAN, 6) \
-    X(WHITE, 7) \
-    X(DEFAULT, 9)
+typedef enum cell_flags {
+    CELL_FLAGS_NONE = 0,
+    CELL_FLAGS_BG_BRIGHT = 1 << 0,
+    CELL_FLAGS_FG_BRIGHT = 1 << 1,
+    CELL_FLAGS_BOLD = 1 << 2,
+    CELL_FLAGS_ITALIC = 1 << 3,
+    CELL_FLAGS_UNDERLINE = 1 << 4,
+    CELL_FLAGS_STRIKETHROUGH = 1 << 5,
+} cell_flags;
 
-#define ANSI_COLOR_ENUM(name, value) ANSI_COLOR_##name = value, ANSI_COLOR_BRIGHT_##name = value + 60,
+typedef enum color {
+    COLOR_BLACK = 0,
+    COLOR_RED = 1,
+    COLOR_GREEN = 2,
+    COLOR_YELLOW = 3,
+    COLOR_BLUE = 4,
+    COLOR_MAGENTA = 5,
+    COLOR_CYAN = 6,
+    COLOR_WHITE = 7,
+    COLOR_DEFAULT = 9,
+} color;
 
-typedef enum ansi_color {
-    ANSI_COLOR_X(ANSI_COLOR_ENUM)
-} ansi_color;
+#define CELL_STYLE_BG_COLOR(style) (((style).data) & 0xF)
+#define CELL_STYLE_FG_COLOR(style) ((((style).data) >> 4) & 0xF)
+#define CELL_STYLE_FLAGS(style) ((((style).data) >> 8) & 0xFF)
+#define CELL_STYLE_PACK(bg, fg, flags) \
+    ((cell_style) { \
+        .data = (((flags) & 0xFF) << 8) | (((fg) & 0xF) << 4) | ((bg) & 0xF) \
+    })
 
-#define ANSI_FG(color) ((color) + 30)
-#define ANSI_BG(color) ((color) + 40)
+typedef struct cell_style {
+    //  |  8 bits (flags) | 4 bits (fg) | 4 bits (bg) |
+    // 15 --------------------------------------------0
+    uint16_t data;
+} cell_style;
+
+// TODO: This cell wastes too much space
+typedef struct cell {
+    cell_style style;
+    utf8_char ch;
+} cell;
 
 typedef struct pty_win_size {
     int width;
@@ -51,7 +74,7 @@ typedef struct draw_command {
         } box;
         struct {
             char x, y;
-            ansi_color color;
+            cell_style style;
         } square;
         struct {
             // TODO
@@ -59,13 +82,6 @@ typedef struct draw_command {
         } string;
     };
 } draw_command;
-
-// TODO: This cell wastes too much space
-typedef struct cell {
-    ansi_color fg;
-    ansi_color bg;
-    utf8_char ch;
-} cell;
 
 #define GRID_HEIGHT (60 * 1)
 #define GRID_WIDTH (60 * 2)
@@ -88,7 +104,7 @@ typedef struct renderer {
 size_t renderer_enter(char *buffer, size_t buffer_size);
 size_t renderer_exit(char *buffer, size_t buffer_size);
 
-void renderer_square(renderer *renderer, int x, int y, ansi_color color);
+void renderer_square(renderer *renderer, int x, int y, cell_style style);
 
 void renderer_string(renderer *renderer, const char *str, int x, int y);
 
