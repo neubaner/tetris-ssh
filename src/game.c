@@ -124,10 +124,13 @@ static void clear_rows(game_state *state)
     }
 }
 
-static void tetrimino_bag_shuffle(tetrimino_bag *bag)
+static void tetrimino_bag_shuffle(tetrimino_bag *bag, uint8_t start)
 {
+    assert(bag->head + start <= TETRIMINO_TYPE_COUNT);
+
+    uint8_t head = bag->head + start;
     for (int i = 0; i < TETRIMINO_TYPE_COUNT; i++) {
-        bag->queue[i] = i;
+        bag->queue[head + i] = i;
     }
 
     // Fisher-yates shuffle
@@ -136,21 +139,24 @@ static void tetrimino_bag_shuffle(tetrimino_bag *bag)
         // Also, each game should have its own random seed instead of sharing it with other
         // game sessions.
         int j = rand() % (i + 1);
-        uint8_t tmp = bag->queue[i];
-        bag->queue[i] = bag->queue[j];
-        bag->queue[j] = tmp;
+        uint8_t tmp = bag->queue[head + i];
+        bag->queue[head + i] = bag->queue[head + j];
+        bag->queue[head + j] = tmp;
     }
-
-    bag->count = TETRIMINO_TYPE_COUNT;
 }
 
 static tetrimino_type tetrimino_bag_pull(tetrimino_bag *bag)
 {
-    if (bag->count == 0) {
-        tetrimino_bag_shuffle(bag);
+    if (bag->head == 0){
+        tetrimino_bag_shuffle(bag, TETRIMINO_TYPE_COUNT);
+    } else if (bag->head == TETRIMINO_TYPE_COUNT) {
+        tetrimino_bag_shuffle(bag, 0);
     }
 
-    return bag->queue[--bag->count];
+    tetrimino_type type = bag->queue[bag->head];
+    bag->head = (bag->head + 1) % (sizeof(bag->queue) / sizeof(bag->queue[0]));
+
+    return type;
 }
 
 static void place_new_tetrimino(game_state *state)
@@ -224,8 +230,10 @@ static void tetrimino_ghost_render(const game_state *state, renderer *renderer, 
 void game_init(game_state *state)
 {
     memset(state->grid, 0, sizeof(state->grid));
-    tetrimino_bag_shuffle(&state->bag);
+    tetrimino_bag_shuffle(&state->bag, 0);
+    tetrimino_bag_shuffle(&state->bag, TETRIMINO_TYPE_COUNT);
     place_new_tetrimino(state);
+    state->holded = -1;
 }
 
 void game_input(game_state *state, key_press press)
@@ -246,6 +254,8 @@ void game_input(game_state *state, key_press press)
         state->actions |= GAME_ACTION_ROTATE_RIGHT;
     } else if ((press.kind == KEY_KIND_CHAR && (press.ch == 'q' || press.ch == 'Q'))) {
         state->actions |= GAME_ACTION_ROTATE_LEFT;
+    } else if ((press.kind == KEY_KIND_CHAR && (press.ch == 'c' || press.ch == 'c'))) {
+        state->actions |= GAME_ACTION_HOLD;
     }
 }
 
@@ -259,6 +269,21 @@ void game_update(game_state *state, uint64_t dt_ns)
         merge_into_board(state, offsets);
         place_new_tetrimino(state);
         clear_rows(state);
+
+    } else if (state->actions & GAME_ACTION_HOLD) {
+        // TODO: This action should once be allowed once per "turn"
+        if (state->holded < 0) {
+            state->holded = state->type;
+            place_new_tetrimino(state);
+        } else {
+            int tmp = state->holded;
+            state->holded = state->type;
+            state->type = tmp;
+            state->x = 4;
+            state->y = 21;
+            state->fall_timer = FALL_TIMER;
+            state->rot = TETRIMINO_ROTATION_0;
+        }
     } else {
         int dx = 0;
         int dy = 0;
@@ -279,6 +304,7 @@ void game_update(game_state *state, uint64_t dt_ns)
         if (state->actions & GAME_ACTION_ROTATE_LEFT) {
             state->rot = (state->rot + TETRIMINO_ROTATION_COUNT - 1) % TETRIMINO_ROTATION_COUNT;
         }
+
         if (state->actions & GAME_ACTION_ROTATE_RIGHT) {
             state->rot = (state->rot + 1) % TETRIMINO_ROTATION_COUNT;
         }
@@ -319,4 +345,31 @@ void game_render(const game_state *state, renderer *renderer)
     tetrimino_ghost_render(state, renderer, offset_x, offset_y);
     tetrimino_render(renderer, state->type, state->rot, state->x, state->y - 20, offset_x, offset_y);
     board_render(state, renderer, offset_x, offset_y);
+
+    renderer_box(renderer, offset_x + GAME_GRID_WIDTH * 2 + 4, offset_y, 2 * 4, 4);
+    if (state->holded > 0)
+    {
+        tetrimino_render(
+            renderer,
+            state->holded,
+            TETRIMINO_ROTATION_0,
+            1,
+            1,
+            offset_x + GAME_GRID_WIDTH * 2 + 4,
+            offset_y);
+    }
+
+    for (int i = 0; i < 3; i++)
+    {
+        size_t bag_idx = (state->bag.head + i) % (sizeof(state->bag.queue) / sizeof(state->bag.queue[0]));
+        tetrimino_type tetrimino = state->bag.queue[bag_idx];
+        tetrimino_render(
+            renderer,
+            tetrimino,
+            TETRIMINO_ROTATION_0,
+            1,
+            4 * (i + 1),
+            offset_x + GAME_GRID_WIDTH * 2 + 4,
+            offset_y + 2);
+    }
 }

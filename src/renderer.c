@@ -256,15 +256,13 @@ size_t renderer_render(renderer *renderer, pty_win_size win_size, char *buffer, 
     int back_buffer_idx = renderer->front_buffer_idx ? 0 : 1;
     buf_writer writer = { .content = buffer, .capacity = buffer_size, .cursor = 0 };
 
-    buf_writer_write(&writer, ANSI_CURSOR_HOME_POSITION, sizeof(ANSI_CURSOR_HOME_POSITION) - 1);
-    buf_writer_write(&writer, ANSI_RESET_COLOR, sizeof(ANSI_RESET_COLOR) - 1);
-
     terminal_grid front_grid = {0};
     terminal_grid back_grid = {0};
 
     rasterize(&renderer->command_buffer[front_buffer_idx], &front_grid);
     rasterize(&renderer->command_buffer[back_buffer_idx], &back_grid);
 
+    buf_writer_write(&writer, ANSI_CURSOR_HOME_POSITION, sizeof(ANSI_CURSOR_HOME_POSITION) - 1);
     // TODO: Fix tearing when screen resizes
     for (int y = 0; y < GRID_HEIGHT; y++) {
         for (int x = 0; x < GRID_WIDTH; x++) {
@@ -299,6 +297,7 @@ size_t renderer_render(renderer *renderer, pty_win_size win_size, char *buffer, 
             }
         }
     }
+    buf_writer_write(&writer, ANSI_RESET_COLOR, sizeof(ANSI_RESET_COLOR) - 1);
 
     // Swap buffer
     memset(&renderer->command_buffer[back_buffer_idx], 0, sizeof(renderer->command_buffer[0]));
