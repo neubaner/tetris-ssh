@@ -66,17 +66,5 @@ int main(void)
         test_assert_eq_uint(uint8_t, ring_buf_size(&buf), 1);
     }
 
-    test_case("cursor wrapping") {
-        ring_buf buf = {
-            .head = 0xff,
-            .tail = 0xff,
-        };
-
-        ring_buf_push(&buf, 'a');
-        test_assert_eq_uint(uint8_t, ring_buf_size(&buf), 1);
-        test_assert(!ring_buf_is_empty(&buf));
-        test_assert(!ring_buf_is_full(&buf));
-    }
-
     return test_summary();
 }

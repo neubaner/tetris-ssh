@@ -26,33 +26,20 @@ do { \
     } \
 } while(0)
 
-#define test_assert_eq_int(T, left, right) \
+#define define_test_assert_eq(T, left, right, fmt) \
 do { \
     T _left = (left); \
     T _right = (right); \
     if (_left != _right) { \
-        test__case_failed(__FILE__, __LINE__, "%d != %d", _left, _right); \
+        test__case_failed(__FILE__, __LINE__, fmt, _left, _right); \
     } \
 } while(0)
 
-#define test_assert_eq_uint(T, left, right) \
-do { \
-    T _left = (left); \
-    T _right = (right); \
-    if (_left != _right) { \
-        test__case_failed(__FILE__, __LINE__, "%u != %u", _left, _right); \
-    } \
-} while(0)
-
-#define test_assert_eq_char(left, right) \
-do { \
-    char _left = (left); \
-    char _right = (right); \
-    if (_left != _right) { \
-        test__case_failed(__FILE__, __LINE__, "'%c' != '%c'", _left, _right); \
-    } \
-} while(0)
-
+#define test_assert_eq_int(T, left, right) define_test_assert_eq(T, left, right, "%d != %d")
+#define test_assert_eq_uint(T, left, right) define_test_assert_eq(T, left, right, "%u != %u")
+#define test_assert_eq_size_t(left, right) define_test_assert_eq(size_t, left, right, "%zu != %zu")
+#define test_assert_eq_ptrdiff_t(left, right) define_test_assert_eq(ptrdiff_t, left, right, "%td != %td")
+#define test_assert_eq_char(left, right) define_test_assert_eq(char, left, right, "'%c' != '%c'")
 #define test_assert_eq_enum(left, right) \
 do { \
     int _left = (left); \
