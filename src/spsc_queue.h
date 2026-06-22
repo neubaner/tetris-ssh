@@ -3,16 +3,22 @@
 
 #include <stdatomic.h>
 #include <stdbool.h>
+#include <stdalign.h>
 
 // TODO: The capacity of the queue should not be fixed
 
 #define SESSION_QUEUE_CAPACITY 16
+#define CACHE_LINE_SIZE 64
 
 // A single producer single consumer queue. There must be only one consumer thread and one producer thread.
 // The capacity of queue is limited by SESSION_QUEUE_CAPACITY.
 typedef struct spsc_queue {
-    atomic_size_t head;
-    atomic_size_t tail;
+    struct {
+        alignas(CACHE_LINE_SIZE) atomic_size_t head;
+        size_t cached_tail;
+        alignas(CACHE_LINE_SIZE) atomic_size_t tail;
+        size_t cached_head;
+    };
     void *ring[SESSION_QUEUE_CAPACITY];
 } spsc_queue;
 

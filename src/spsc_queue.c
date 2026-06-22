@@ -16,10 +16,14 @@ bool spsc_queue_push(spsc_queue *queue, void *item)
 {
     size_t tail = atomic_load_explicit(&queue->tail, memory_order_relaxed);
     size_t next_tail = tail + 1;
-    size_t head = atomic_load_explicit(&queue->head, memory_order_acquire);
+    size_t head = queue->cached_head;
 
     if (spsc_queue__is_full(head, tail)) {
-        return false;
+        head = atomic_load_explicit(&queue->head, memory_order_acquire);
+        queue->cached_head = head;
+        if (spsc_queue__is_full(head, tail)) {
+            return false;
+        }
     }
 
     queue->ring[SESSION_QUEUE_MASK(tail)] = item;
@@ -32,10 +36,14 @@ bool spsc_queue_shift(spsc_queue *queue, void **item)
 {
     size_t head = atomic_load_explicit(&queue->head, memory_order_relaxed);
     size_t next_head = head + 1;
-    size_t tail = atomic_load_explicit(&queue->tail, memory_order_acquire);
+    size_t tail = queue->cached_tail;
 
     if (spsc_queue__is_empty(head, tail)) {
-        return false;
+        tail = atomic_load_explicit(&queue->tail, memory_order_acquire);
+        queue->cached_tail = tail;
+        if (spsc_queue__is_empty(head, tail)) {
+            return false;
+        }
     }
 
     *item = queue->ring[SESSION_QUEUE_MASK(head)];

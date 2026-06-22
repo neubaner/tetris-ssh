@@ -372,4 +372,5 @@ void game_render(const game_state *state, renderer *renderer)
             offset_x + GAME_GRID_WIDTH * 2 + 4,
             offset_y + 2);
     }
+
 }
