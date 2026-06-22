@@ -1,6 +1,7 @@
 # Nix
 result
 result-*
+.direnv
 
 # clangd
 .cache

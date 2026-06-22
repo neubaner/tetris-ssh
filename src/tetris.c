@@ -346,7 +346,7 @@ int main(void)
     const char address[] = "localhost";
     // TODO: Accept key file as a parameter. Check how to generate a strong key
     const char host_key_path[] = "/home/neubaner/code/tetris-ssh/rsa_key";
-    const int port = 2222;
+    const int port = 2223;
 
     // TODO: Check options result
     ssh_bind_options_set(sshbind, SSH_BIND_OPTIONS_BINDADDR, address);
